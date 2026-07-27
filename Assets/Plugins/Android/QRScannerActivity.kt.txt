@@ -1,0 +1,101 @@
+package com.unity.template.ar_mobile
+
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Bundle
+import android.util.Size
+import android.view.ViewGroup
+import androidx.appcompat.app.AppCompatActivity
+import androidx.camera.core.*
+import androidx.camera.lifecycle.ProcessCameraProvider
+import androidx.camera.view.PreviewView
+import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
+import com.google.mlkit.vision.barcode.BarcodeScanning
+import com.google.mlkit.vision.barcode.common.Barcode
+import com.google.mlkit.vision.common.InputImage
+import com.unity3d.player.UnityPlayer
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
+
+class QRScannerActivity : AppCompatActivity() {
+    private lateinit var cameraExecutor: ExecutorService
+    private var isScanning = true
+
+    companion object {
+        private const val REQUEST_CODE_PERMISSIONS = 10
+        private val REQUIRED_PERMISSIONS = arrayOf(Manifest.permission.CAMERA)
+        private const val UNITY_OBJECT = "QRManager"
+        private const val UNITY_METHOD = "OnNativeQRScanned"
+    }
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        val previewView = PreviewView(this).apply {
+            layoutParams = ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT
+            )
+            scaleType = PreviewView.ScaleType.FILL_CENTER
+        }
+        setContentView(previewView)
+        cameraExecutor = Executors.newSingleThreadExecutor()
+        if (allPermissionsGranted()) startCamera(previewView)
+        else ActivityCompat.requestPermissions(this, REQUIRED_PERMISSIONS, REQUEST_CODE_PERMISSIONS)
+    }
+
+    private fun startCamera(previewView: PreviewView) {
+        val cameraProviderFuture = ProcessCameraProvider.getInstance(this)
+        cameraProviderFuture.addListener({
+            val cameraProvider = cameraProviderFuture.get()
+            val preview = Preview.Builder().build().also { it.setSurfaceProvider(previewView.surfaceProvider) }
+            val imageAnalysis = ImageAnalysis.Builder()
+                .setTargetResolution(Size(1280, 720))
+                .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                .build()
+                .also { it.setAnalyzer(cameraExecutor) { imageProxy ->
+                    if (!isScanning) { imageProxy.close(); return@setAnalyzer }
+                    processImage(imageProxy)
+                }}
+            try {
+                cameraProvider.unbindAll()
+                cameraProvider.bindToLifecycle(this, CameraSelector.DEFAULT_BACK_CAMERA, preview, imageAnalysis)
+            } catch (e: Exception) { sendToUnity("ERROR:${e.message}") }
+        }, ContextCompat.getMainExecutor(this))
+    }
+
+    private fun processImage(imageProxy: ImageProxy) {
+        val mediaImage = imageProxy.image ?: run { imageProxy.close(); return }
+        val image = InputImage.fromMediaImage(mediaImage, imageProxy.imageInfo.rotationDegrees)
+        BarcodeScanning.getClient().process(image)
+            .addOnSuccessListener { barcodes ->
+                for (barcode in barcodes) {
+                    barcode.rawValue?.let { value ->
+                        isScanning = false
+                        sendToUnity(value)
+                        previewView.postDelayed({ finish() }, 300)
+                        return@addOnSuccessListener
+                    }
+                }
+            }
+            .addOnCompleteListener { imageProxy.close() }
+    }
+
+    private fun sendToUnity(message: String) {
+        UnityPlayer.UnitySendMessage(UNITY_OBJECT, UNITY_METHOD, message)
+    }
+
+    private fun allPermissionsGranted() = REQUIRED_PERMISSIONS.all {
+        ContextCompat.checkSelfPermission(baseContext, it) == PackageManager.PERMISSION_GRANTED
+    }
+
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == REQUEST_CODE_PERMISSIONS) {
+            if (allPermissionsGranted()) startCamera(findViewById(android.R.id.content) as? PreviewView ?: PreviewView(this))
+            else { sendToUnity("ERROR:Camera permission denied"); finish() }
+        }
+    }
+
+    override fun onDestroy() { super.onDestroy(); cameraExecutor.shutdown() }
+}

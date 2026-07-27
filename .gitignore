@@ -1,0 +1,33 @@
+# Unity generated
+[Ll]ibrary/
+[Tt]emp/
+[Oo]bj/
+[Bb]uild/
+[Bb]uilds/
+[Ll]ogs/
+[Uu]ser[Ss]ettings/
+
+# XR Simulation files (которые сегодня ломали сборку)
+Assets/XR/Temp/
+Assets/XR/UserSimulationSettings/
+Assets/XR/Resources/XRSimulationRuntimeSettings.asset
+
+# Visual Studio / Rider
+.vs/
+*.csproj
+*.sln
+*.suo
+*.tmp
+*.user
+*.userprefs
+*.pidb
+*.booproj
+*.svd
+*.pdb
+*.mdb
+*.opendb
+*.VC.db
+
+# OS generated
+.DS_Store
+Thumbs.db

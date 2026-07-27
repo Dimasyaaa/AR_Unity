@@ -1,0 +1,47 @@
+apply plugin: 'com.android.application'
+apply from: 'setupSymbols.gradle'
+apply from: '../shared/keepUnitySymbols.gradle'
+apply from: '../shared/common.gradle'
+
+dependencies {
+    implementation project(':unityLibrary')
+    **DEPS**
+}
+
+android {
+    namespace "**NAMESPACE**"
+    ndkPath "**NDKPATH**"
+    ndkVersion "**NDKVERSION**"
+    compileSdk **APIVERSION**
+    buildToolsVersion "**BUILDTOOLS**"
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    defaultConfig {
+        minSdk **MINSDK**
+        targetSdk **TARGETSDK**
+        applicationId '**APPLICATIONID**'
+        ndk {
+            abiFilters **ABIFILTERS**
+            debugSymbolLevel **DEBUGSYMBOLLEVEL**
+        }
+        versionCode **VERSIONCODE**
+        versionName '**VERSIONNAME**'
+    }
+
+    androidResources {
+        noCompress = **BUILTIN_NOCOMPRESS** + unityStreamingAssets.tokenize(', ')
+        ignoreAssetsPattern = "!.svn:!.git:!.ds_store:!*.scc:!CVS:!thumbs.db:!picasa.ini:!*~"
+    }
+    **SIGN**
+    
+    lint {
+        abortOnError false
+    }
+}
+**IL_CPP_BUILD_SETUP**
+**SOURCE_BUILD_SETUP**
+**EXTERNAL_SOURCES**
