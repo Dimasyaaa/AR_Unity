@@ -31,3 +31,11 @@ Assets/XR/Resources/XRSimulationRuntimeSettings.asset
 # OS generated
 .DS_Store
 Thumbs.db
+
+# файлы CMake (IL2CPP)
+.utmp/
+# восстановления Unity
+Assets/_Recovery/
+*.apk
+*.aab
+*.zip

@@ -12,13 +12,14 @@ import androidx.camera.view.PreviewView
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import com.google.mlkit.vision.barcode.BarcodeScanning
-import com.google.mlkit.vision.barcode.common.Barcode
 import com.google.mlkit.vision.common.InputImage
 import com.unity3d.player.UnityPlayer
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
 class QRScannerActivity : AppCompatActivity() {
+    // ВАЖНО: Вынесли в поле класса, чтобы было доступно в processImage и onRequestPermissionsResult
+    private lateinit var previewView: PreviewView
     private lateinit var cameraExecutor: ExecutorService
     private var isScanning = true
 
@@ -31,7 +32,9 @@ class QRScannerActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        val previewView = PreviewView(this).apply {
+        
+        // Инициализируем поле класса
+        previewView = PreviewView(this).apply {
             layoutParams = ViewGroup.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT
@@ -39,40 +42,62 @@ class QRScannerActivity : AppCompatActivity() {
             scaleType = PreviewView.ScaleType.FILL_CENTER
         }
         setContentView(previewView)
+        
         cameraExecutor = Executors.newSingleThreadExecutor()
-        if (allPermissionsGranted()) startCamera(previewView)
-        else ActivityCompat.requestPermissions(this, REQUIRED_PERMISSIONS, REQUEST_CODE_PERMISSIONS)
+        
+        if (allPermissionsGranted()) {
+            startCamera()
+        } else {
+            ActivityCompat.requestPermissions(this, REQUIRED_PERMISSIONS, REQUEST_CODE_PERMISSIONS)
+        }
     }
 
-    private fun startCamera(previewView: PreviewView) {
+    private fun startCamera() {
         val cameraProviderFuture = ProcessCameraProvider.getInstance(this)
         cameraProviderFuture.addListener({
-            val cameraProvider = cameraProviderFuture.get()
-            val preview = Preview.Builder().build().also { it.setSurfaceProvider(previewView.surfaceProvider) }
-            val imageAnalysis = ImageAnalysis.Builder()
-                .setTargetResolution(Size(1280, 720))
-                .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-                .build()
-                .also { it.setAnalyzer(cameraExecutor) { imageProxy ->
-                    if (!isScanning) { imageProxy.close(); return@setAnalyzer }
-                    processImage(imageProxy)
-                }}
             try {
+                val cameraProvider = cameraProviderFuture.get()
+                val preview = Preview.Builder().build().also { 
+                    it.setSurfaceProvider(previewView.surfaceProvider) 
+                }
+                
+                val imageAnalysis = ImageAnalysis.Builder()
+                    .setTargetResolution(Size(1280, 720))
+                    .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                    .build()
+                    .also { 
+                        it.setAnalyzer(cameraExecutor) { imageProxy ->
+                            if (!isScanning) { 
+                                imageProxy.close()
+                                return@setAnalyzer 
+                            }
+                            processImage(imageProxy)
+                        }
+                    }
+                    
                 cameraProvider.unbindAll()
                 cameraProvider.bindToLifecycle(this, CameraSelector.DEFAULT_BACK_CAMERA, preview, imageAnalysis)
-            } catch (e: Exception) { sendToUnity("ERROR:${e.message}") }
+            } catch (e: Exception) { 
+                sendToUnity("ERROR:${e.message}") 
+            }
         }, ContextCompat.getMainExecutor(this))
     }
 
     private fun processImage(imageProxy: ImageProxy) {
-        val mediaImage = imageProxy.image ?: run { imageProxy.close(); return }
+        val mediaImage = imageProxy.image ?: run { 
+            imageProxy.close()
+            return 
+        }
+        
         val image = InputImage.fromMediaImage(mediaImage, imageProxy.imageInfo.rotationDegrees)
+        
         BarcodeScanning.getClient().process(image)
             .addOnSuccessListener { barcodes ->
                 for (barcode in barcodes) {
                     barcode.rawValue?.let { value ->
                         isScanning = false
                         sendToUnity(value)
+                        // Теперь ошибок не будет, previewView доступна
                         previewView.postDelayed({ finish() }, 300)
                         return@addOnSuccessListener
                     }
@@ -92,10 +117,17 @@ class QRScannerActivity : AppCompatActivity() {
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (requestCode == REQUEST_CODE_PERMISSIONS) {
-            if (allPermissionsGranted()) startCamera(findViewById(android.R.id.content) as? PreviewView ?: PreviewView(this))
-            else { sendToUnity("ERROR:Camera permission denied"); finish() }
+            if (allPermissionsGranted()) {
+                startCamera() // Просто запускаем камеру на уже созданном previewView
+            } else { 
+                sendToUnity("ERROR:Camera permission denied")
+                finish() 
+            }
         }
     }
 
-    override fun onDestroy() { super.onDestroy(); cameraExecutor.shutdown() }
+    override fun onDestroy() { 
+        super.onDestroy()
+        cameraExecutor.shutdown() 
+    }
 }

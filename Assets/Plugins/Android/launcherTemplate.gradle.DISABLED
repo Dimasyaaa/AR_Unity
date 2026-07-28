@@ -3,6 +3,8 @@ apply from: 'setupSymbols.gradle'
 apply from: '../shared/keepUnitySymbols.gradle'
 apply from: '../shared/common.gradle'
 
+**APPLY_PLUGINS**
+
 dependencies {
     implementation project(':unityLibrary')
     **DEPS**
@@ -42,6 +44,4 @@ android {
         abortOnError false
     }
 }
-**IL_CPP_BUILD_SETUP**
-**SOURCE_BUILD_SETUP**
 **EXTERNAL_SOURCES**

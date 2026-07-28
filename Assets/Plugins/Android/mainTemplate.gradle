@@ -1,24 +1,15 @@
 apply plugin: 'com.android.library'
 apply from: '../shared/keepUnitySymbols.gradle'
 apply from: '../shared/common.gradle'
-//apply plugin: 'kotlin-android'
 
 **APPLY_PLUGINS**
-
-buildscript {
-    repositories {
-        google()
-        mavenCentral()
-    }
-    dependencies {
-        // Unity 6 уже имеет Kotlin, но мы явно указываем плагин для совместимости
-        //classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:1.9.22"
-    }
-}
 
 dependencies {
     implementation fileTree(dir: 'libs', include: ['*.jar'])
     **DEPS**
+
+    // AppCompat для AppCompatActivity
+    implementation 'androidx.appcompat:appcompat:1.6.1'
 
     // ML Kit и CameraX
     implementation 'com.google.mlkit:barcode-scanning:17.2.0'
@@ -41,9 +32,8 @@ android {
         targetCompatibility JavaVersion.VERSION_17
     }
 
-   // kotlinOptions {
-    //    jvmTarget = '17'
-    //}
+    // Блок kotlinOptions удален, так как он вызывает ошибку без явного плагина kotlin-android.
+    // compileOptions выше достаточно для задания целевой версии JVM.
 
     defaultConfig {
         minSdk **MINSDK**
@@ -69,18 +59,17 @@ android {
 **IL_CPP_BUILD_SETUP**
 **SOURCE_BUILD_SETUP**
 **EXTERNAL_SOURCES**
+
+// === ФИКС ОШИБКИ DUPLICATE CLASS ===
 configurations.all {
     resolutionStrategy {
         eachDependency { DependencyResolveDetails details ->
             if (details.requested.group == 'org.jetbrains.kotlin') {
-                if (details.requested.name == 'kotlin-stdlib' || details.requested.name == 'kotlin-stdlib-jdk7' || details.requested.name == 'kotlin-stdlib-jdk8') {
+                if (details.requested.name.startsWith('kotlin-stdlib')) {
                     details.useVersion '1.8.22'
-                    details.because 'Unity 6 requires Kotlin 1.8.22 to prevent duplicate class errors'
+                    details.because 'Force unified Kotlin version to prevent duplicate class errors in Unity 6'
                 }
             }
         }
     }
-    // Дополнительная страховка: исключаем старые модули из всех зависимостей
-    exclude group: 'org.jetbrains.kotlin', module: 'kotlin-stdlib-jdk7'
-    exclude group: 'org.jetbrains.kotlin', module: 'kotlin-stdlib-jdk8'
 }
