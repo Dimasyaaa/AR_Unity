@@ -77,6 +77,18 @@ public class CubeWebViewHandler : MonoBehaviour
 
     void CreateWebViewCanvas()
     {
+        // Если камера не назначена, ищем автоматически
+        if (arCamera == null)
+        {
+            arCamera = Camera.main;
+            if (arCamera == null)
+            {
+                Debug.LogError("No camera found! Assign arCamera in Inspector or ensure there's a MainCamera in scene.");
+                return;
+            }
+            Debug.Log("Auto-assigned camera: " + arCamera.name);
+        }
+
         webViewCanvas = new GameObject("WebViewCanvas");
         Canvas canvas = webViewCanvas.AddComponent<Canvas>();
         canvas.renderMode = RenderMode.WorldSpace;
@@ -96,48 +108,46 @@ public class CubeWebViewHandler : MonoBehaviour
         Debug.Log("Is mobile platform: " + (Application.platform == RuntimePlatform.Android || Application.platform == RuntimePlatform.IPhonePlayer));
 
 #if UNITY_ANDROID || UNITY_IOS
-    Debug.Log("Building for MOBILE platform - initializing native WebView");
-    
-    try 
-    {
-        webViewObject = webViewCanvas.AddComponent<WebViewObject>();
-        
-        Debug.Log("WebViewObject created, initializing...");
-        
-        webViewObject.Init(
-            cb: (msg) => Debug.Log($"WebView JS Callback: {msg}"),
-            err: (msg) => Debug.LogError($"WebView Error: {msg}"),
-            httpErr: (msg) => Debug.LogError($"WebView HTTP Error: {msg}"),
-            ld: (msg) => 
-            {
-                Debug.Log($"WebView Loaded: {msg}");
-                Debug.Log("WebView progress: " + webViewObject.Progress() + "%");
-            },
-            started: (msg) => Debug.Log($"WebView Started: {msg}"),
-            enableWKWebView: true,
-            zoom: false
-        );
+        Debug.Log("Building for MOBILE platform - initializing native WebView");
 
-        webViewObject.SetMargins(0, 0, 0, 0);
-        webViewObject.SetVisibility(true);
-        
-        // bitmapRefreshCycle НЕ доступен на Android/iOS - удалили эту строку
-        
-        Debug.Log("Loading URL: " + url);
-        webViewObject.LoadURL(url);
-        
-        Debug.Log("WebView initialization complete!");
-    }
-    catch (System.Exception e)
-    {
-        Debug.LogError("Failed to initialize WebView: " + e.Message);
-        Debug.LogError("Stack trace: " + e.StackTrace);
-        Application.OpenURL(url);
-    }
-    
+        try
+        {
+            webViewObject = webViewCanvas.AddComponent<WebViewObject>();
+
+            Debug.Log("WebViewObject created, initializing...");
+
+            webViewObject.Init(
+                cb: (msg) => Debug.Log($"WebView JS Callback: {msg}"),
+                err: (msg) => Debug.LogError($"WebView Error: {msg}"),
+                httpErr: (msg) => Debug.LogError($"WebView HTTP Error: {msg}"),
+                ld: (msg) =>
+                {
+                    Debug.Log($"WebView Loaded: {msg}");
+                    Debug.Log("WebView progress: " + webViewObject.Progress() + "%");
+                },
+                started: (msg) => Debug.Log($"WebView Started: {msg}"),
+                enableWKWebView: true,
+                zoom: false
+            );
+
+            webViewObject.SetMargins(0, 0, 0, 0);
+            webViewObject.SetVisibility(true);
+
+            Debug.Log("Loading URL: " + url);
+            webViewObject.LoadURL(url);
+
+            Debug.Log("WebView initialization complete!");
+        }
+        catch (System.Exception e)
+        {
+            Debug.LogError("Failed to initialize WebView: " + e.Message);
+            Debug.LogError("Stack trace: " + e.StackTrace);
+            Application.OpenURL(url);
+        }
+
 #else
-        Debug.LogWarning("NOT on mobile platform! Opening in external browser.");
-        Application.OpenURL(url);
+    Debug.LogWarning("NOT on mobile platform! Opening in external browser.");
+    Application.OpenURL(url);
 #endif
     }
 
