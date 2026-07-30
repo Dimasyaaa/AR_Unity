@@ -117,7 +117,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 4302eb1266741a4439fb3adcabd58ed2, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::CubeWebViewHandler
-  url: https://www.wikipedia.org
+  url: 
   webViewDistance: 0.15
-  cubeVisual: {fileID: 0}
+  cubeVisual: {fileID: 613292779795284151, guid: ebd7292e888c84f05924605e51048072, type: 3}
   arCamera: {fileID: 0}

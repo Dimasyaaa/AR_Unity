@@ -9,12 +9,15 @@ using UnityEngine.XR.Interaction.Toolkit.Interactables;
 public class CubeWebViewHandler : MonoBehaviour
 {
     [Header("Settings")]
-    // Дефолтный URL. Будет перезаписан в Start(), если найден результат сканирования QR
-    public string url = "https://www.wikipedia.org";
+    // Дефолтный URL (используется, если QR-код не распознан или пуст)
+    public string url = "https://www.google.com";
     public float webViewDistance = 0.15f;
 
     [Header("References")]
+    [Tooltip("Визуальная модель куба (опционально)")]
     public GameObject cubeVisual;
+
+    [Tooltip("AR камера для правильного позиционирования WebView")]
     public Camera arCamera;
 
     private WebViewObject webViewObject;
@@ -36,30 +39,41 @@ public class CubeWebViewHandler : MonoBehaviour
 
     void Start()
     {
+        Debug.Log("=== CubeWebViewHandler Start ===");
+        Debug.Log("Текущее значение LastScannedQR: '" + GameDataManager.LastScannedQR + "'");
+
         // Читаем данные из QR-сканера, если они были сохранены
         if (!string.IsNullOrEmpty(GameDataManager.LastScannedQR))
         {
             string scannedData = GameDataManager.LastScannedQR.Trim();
-            Debug.Log("Найден отсканированный QR: " + scannedData);
+            Debug.Log("=== Найден отсканированный QR-код ===");
+            Debug.Log("Данные: '" + scannedData + "'");
 
             // Проверяем, является ли отсканированный текст прямой ссылкой
             if (scannedData.StartsWith("http://") || scannedData.StartsWith("https://"))
             {
                 url = scannedData;
-                Debug.Log("Установлен URL из QR-кода: " + url);
+                Debug.Log("✓ Это прямая ссылка. Будет открыт URL: " + url);
             }
             else
             {
-                // Если это текст или ID, формируем ссылку на поиск в Википедии, 
-                // чтобы экран не был пустым и не выдавал ошибку браузера
-                url = "https://ru.wikipedia.org/wiki/" + scannedData.Replace(" ", "_");
-                Debug.Log("QR не является ссылкой. Выполняем поиск: " + url);
+                // Если это просто текст (или тестовый TEST_QR_001), открываем главную страницу Google
+                url = "https://www.google.com";
+                Debug.Log("✓ Это не ссылка. Будет открыта главная страница Google.");
             }
+
+            // Очищаем данные после использования, чтобы при следующем запуске не было повтора
+            GameDataManager.LastScannedQR = null;
+            Debug.Log("Данные очищены из GameDataManager");
         }
         else
         {
-            Debug.Log("QR-код не найден, используется тестовый URL: " + url);
+            Debug.Log("=== QR-код не найден или пуст ===");
+            Debug.Log("Используется дефолтный URL: " + url);
         }
+
+        Debug.Log("Итоговый URL для загрузки: " + url);
+        Debug.Log("=== End Start ===");
 
         // Инициализация компонента взаимодействия XR
         grabInteractable = GetComponent<XRGrabInteractable>();
@@ -69,6 +83,13 @@ public class CubeWebViewHandler : MonoBehaviour
         if (grabInteractable != null)
         {
             grabInteractable.selectEntered.AddListener(OnCubeSelected);
+        }
+
+        // Если камера не назначена в Инспекторе, пытаемся найти автоматически
+        if (arCamera == null)
+        {
+            arCamera = Camera.main;
+            Debug.LogWarning("Ar Camera не назначена в Инспекторе! Используется Camera.main: " + (arCamera != null ? arCamera.name : "NULL"));
         }
 
         Debug.Log("CubeWebViewHandler initialized. Platform: " + Application.platform);
@@ -132,7 +153,15 @@ public class CubeWebViewHandler : MonoBehaviour
 
     void CreateWebViewCanvas()
     {
-        if (arCamera == null) arCamera = Camera.main;
+        if (arCamera == null)
+        {
+            arCamera = Camera.main;
+            if (arCamera == null)
+            {
+                Debug.LogError("CRITICAL: No camera found! Cannot create WebView.");
+                return;
+            }
+        }
 
         // Создаем невидимый объект-триггер для системы XR Interaction Toolkit
         webViewTrigger = new GameObject("WebViewTrigger");
