@@ -1,15 +1,13 @@
-using UnityEngine;
-using UnityEngine.UI;
-using UnityEngine.XR.Interaction.Toolkit;
 using Gree.UnityWebView;
+using UnityEngine;
+using UnityEngine.XR.Interaction.Toolkit;
+using UnityEngine.XR.Interaction.Toolkit.Interactables;
 
 public class CubeWebViewHandler : MonoBehaviour
 {
     [Header("Settings")]
     public string url = "https://github.com";
-    public float webViewDistance = 1.5f;
-    public int webViewWidth = 512;   
-    public int webViewHeight = 384;  
+    public float webViewDistance = 0.15f;
 
     [Header("References")]
     public GameObject cubeVisual;
@@ -18,13 +16,13 @@ public class CubeWebViewHandler : MonoBehaviour
     private WebViewObject webViewObject;
     private GameObject webViewCanvas;
     private bool isWebViewActive = false;
-    private UnityEngine.XR.Interaction.Toolkit.Interactables.XRGrabInteractable grabInteractable;
+    private XRGrabInteractable grabInteractable;
 
     void Start()
     {
-        grabInteractable = GetComponent<UnityEngine.XR.Interaction.Toolkit.Interactables.XRGrabInteractable>();
+        grabInteractable = GetComponent<XRGrabInteractable>();
         if (grabInteractable == null)
-            grabInteractable = GetComponentInChildren<UnityEngine.XR.Interaction.Toolkit.Interactables.XRGrabInteractable>();
+            grabInteractable = GetComponentInChildren<XRGrabInteractable>();
 
         if (grabInteractable != null)
         {
@@ -48,6 +46,7 @@ public class CubeWebViewHandler : MonoBehaviour
         Debug.Log("Opening WebView...");
         isWebViewActive = true;
 
+        // Скрываем визуальную модель куба, чтобы не мешала
         if (cubeVisual != null)
             cubeVisual.SetActive(false);
         else if (transform.childCount > 0)
@@ -61,6 +60,7 @@ public class CubeWebViewHandler : MonoBehaviour
         Debug.Log("Closing WebView...");
         isWebViewActive = false;
 
+        // Возвращаем визуальную модель куба
         if (cubeVisual != null)
             cubeVisual.SetActive(true);
         else if (transform.childCount > 0)
@@ -77,77 +77,71 @@ public class CubeWebViewHandler : MonoBehaviour
 
     void CreateWebViewCanvas()
     {
-        // Если камера не назначена, ищем автоматически
         if (arCamera == null)
         {
             arCamera = Camera.main;
             if (arCamera == null)
             {
-                Debug.LogError("No camera found! Assign arCamera in Inspector or ensure there's a MainCamera in scene.");
+                Debug.LogError("No camera found!");
                 return;
             }
-            Debug.Log("Auto-assigned camera: " + arCamera.name);
         }
 
+        // Создаем "фейковый" 3D-объект для коллайдера (чтобы система XR знала, что мы "держим" объект)
         webViewCanvas = new GameObject("WebViewCanvas");
-        Canvas canvas = webViewCanvas.AddComponent<Canvas>();
-        canvas.renderMode = RenderMode.WorldSpace;
-        canvas.worldCamera = arCamera;
-
-        webViewCanvas.transform.position = transform.position + transform.forward * webViewDistance;
-        webViewCanvas.transform.rotation = arCamera.transform.rotation;
+        webViewCanvas.transform.SetParent(transform);
+        webViewCanvas.transform.localPosition = Vector3.forward * webViewDistance;
+        webViewCanvas.transform.localRotation = Quaternion.identity;
         webViewCanvas.transform.localScale = Vector3.one * 0.001f;
 
-        webViewCanvas.AddComponent<CanvasScaler>();
-        webViewCanvas.AddComponent<UnityEngine.UI.GraphicRaycaster>();
-
-        RectTransform rectTransform = webViewCanvas.GetComponent<RectTransform>();
-        rectTransform.sizeDelta = new Vector2(webViewWidth, webViewHeight);
-
-        Debug.Log("Current platform: " + Application.platform);
-        Debug.Log("Is mobile platform: " + (Application.platform == RuntimePlatform.Android || Application.platform == RuntimePlatform.IPhonePlayer));
+        // Добавляем коллайдер, чтобы XR Interactor мог "удерживать" этот объект
+        var webViewCollider = webViewCanvas.AddComponent<BoxCollider>();
+        webViewCollider.size = new Vector3(0.5f, 0.5f, 0.01f);
+        webViewCollider.center = Vector3.zero;
 
 #if UNITY_ANDROID || UNITY_IOS
-        Debug.Log("Building for MOBILE platform - initializing native WebView");
+        Debug.Log("=== BUILDING FOR MOBILE PLATFORM ===");
 
         try
         {
             webViewObject = webViewCanvas.AddComponent<WebViewObject>();
 
-            Debug.Log("WebViewObject created, initializing...");
-
             webViewObject.Init(
-                cb: (msg) => Debug.Log($"WebView JS Callback: {msg}"),
+                cb: (msg) => Debug.Log($"WebView JS: {msg}"),
                 err: (msg) => Debug.LogError($"WebView Error: {msg}"),
                 httpErr: (msg) => Debug.LogError($"WebView HTTP Error: {msg}"),
-                ld: (msg) =>
-                {
-                    Debug.Log($"WebView Loaded: {msg}");
-                    Debug.Log("WebView progress: " + webViewObject.Progress() + "%");
-                },
+                ld: (msg) => Debug.Log($"WebView Loaded: {msg}"),
                 started: (msg) => Debug.Log($"WebView Started: {msg}"),
                 enableWKWebView: true,
-                zoom: false
+                zoom: false,
+                transparent: true
             );
 
-            webViewObject.SetMargins(0, 0, 0, 0);
+            // === ГЛАВНОЕ ИСПРАВЛЕНИЕ: Делаем аккуратное окно по центру экрана ===
+            int marginX = Screen.width / 8;  // Отступ 12.5% слева и справа
+            int marginY = Screen.height / 6; // Отступ ~16% сверху и снизу
+
+            // SetMargins принимает: left, top, right, bottom
+            webViewObject.SetMargins(marginX, marginY, marginX, marginY);
             webViewObject.SetVisibility(true);
 
             Debug.Log("Loading URL: " + url);
             webViewObject.LoadURL(url);
 
-            Debug.Log("WebView initialization complete!");
+            Debug.Log("=== WebView init complete! ===");
         }
         catch (System.Exception e)
         {
             Debug.LogError("Failed to initialize WebView: " + e.Message);
-            Debug.LogError("Stack trace: " + e.StackTrace);
             Application.OpenURL(url);
         }
-
 #else
-    Debug.LogWarning("NOT on mobile platform! Opening in external browser.");
-    Application.OpenURL(url);
+        // Для Unity Editor просто открываем браузер
+        Debug.LogWarning("Not on mobile - opening external browser");
+        Application.OpenURL(url);
+        
+        // В редакторе сразу закрываем "вебвью", так как он не отобразится в 3D
+        Invoke(nameof(CloseWebView), 0.5f);
 #endif
     }
 
