@@ -2,6 +2,7 @@ using UnityEngine;
 using UnityEngine.SceneManagement;
 using UnityEngine.UI;
 
+// Управляет логикой главного меню, обработкой нажатий кнопок и переходом в AR-сцену
 public class MainMenuManager : MonoBehaviour
 {
     [Header("UI Elements")]
@@ -15,13 +16,13 @@ public class MainMenuManager : MonoBehaviour
 
     void Start()
     {
-        // Настраиваем кнопки
+        // Привязываем методы к событиям нажатия кнопок
         scanButton.onClick.AddListener(OnScanClicked);
         instructionsButton.onClick.AddListener(OnInstructionsClicked);
         exitButton.onClick.AddListener(OnExitClicked);
         closeButton.onClick.AddListener(OnCloseClicked);
 
-        // Скрываем панель инструкции
+        // Скрываем панель инструкций при запуске
         if (instructionsPanel != null)
             instructionsPanel.SetActive(false);
     }
@@ -32,19 +33,25 @@ public class MainMenuManager : MonoBehaviour
 
         if (QRScanner.Instance != null)
         {
+            // Подписываемся на событие сканирования и запускаем процесс
             QRScanner.Instance.OnQRScanned += OnQRScanned;
             QRScanner.Instance.StartScanning();
         }
     }
 
+    // Вызывается при успешном сканировании QR-кода
     private void OnQRScanned(string qrData)
     {
         Debug.Log($"[Menu] QR scanned: {qrData}");
+
+        // Сохраняем данные для использования в следующей сцене
         GameDataManager.LastScannedQR = qrData;
 
+        // Отписываемся от события, чтобы избежать дублирования вызовов
         if (QRScanner.Instance != null)
             QRScanner.Instance.OnQRScanned -= OnQRScanned;
 
+        // Загружаем основную AR-сцену
         SceneManager.LoadScene("SampleScene");
     }
 
@@ -67,8 +74,10 @@ public class MainMenuManager : MonoBehaviour
         Debug.Log("[Menu] Exiting application");
 
 #if UNITY_EDITOR
+        // Остановка режима Play в редакторе
         UnityEditor.EditorApplication.isPlaying = false;
 #else
+        // Закрытие приложения на мобильном устройстве
         Application.Quit();
 #endif
     }
