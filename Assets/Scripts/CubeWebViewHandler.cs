@@ -24,8 +24,8 @@ public class CubeWebViewHandler : MonoBehaviour
 
     // Элементы программного UI
     private GameObject uiCanvas;
-    private GameObject loadingPanel; // Новая панель загрузки
-    private Text loadingText;        // Текст на панели загрузки
+    private GameObject loadingPanel;
+    private Text loadingText;
 
     private int marginLeft;
     private int marginTop;
@@ -33,26 +33,32 @@ public class CubeWebViewHandler : MonoBehaviour
     private int marginBottom;
     private int moveStep = 150;
 
+    // Масштабирование окна (в процентах от базового размера)
+    private float currentZoom = 1.0f;
+    private float zoomStep = 0.15f; // Шаг масштабирования (15%)
+    private float minZoom = 0.5f;   // Минимальный масштаб (50%)
+    private float maxZoom = 2.0f;   // Максимальный масштаб (200%)
+
     void Start()
     {
-        Debug.Log("CubeWebViewHandler Start");
+        Debug.Log("=== CubeWebViewHandler Start ===");
         Debug.Log("Текущее значение LastScannedQR: '" + GameDataManager.LastScannedQR + "'");
 
         if (!string.IsNullOrEmpty(GameDataManager.LastScannedQR))
         {
             string scannedData = GameDataManager.LastScannedQR.Trim();
-            Debug.Log("Найден отсканированный QR-код");
+            Debug.Log("=== Найден отсканированный QR-код ===");
             Debug.Log("Данные: '" + scannedData + "'");
 
             if (scannedData.StartsWith("http://") || scannedData.StartsWith("https://"))
             {
                 url = scannedData;
-                Debug.Log("Это прямая ссылка. Будет открыт URL: " + url);
+                Debug.Log("✓ Это прямая ссылка. Будет открыт URL: " + url);
             }
             else
             {
                 url = "https://www.google.com";
-                Debug.Log("Это не ссылка. Будет открыта главная страница Google.");
+                Debug.Log("✓ Это не ссылка. Будет открыта главная страница Google.");
             }
 
             GameDataManager.LastScannedQR = null;
@@ -60,7 +66,7 @@ public class CubeWebViewHandler : MonoBehaviour
         }
         else
         {
-            Debug.Log("QR-код не найден или пуст");
+            Debug.Log("=== QR-код не найден или пуст ===");
             Debug.Log("Используется дефолтный URL: " + url);
         }
 
@@ -78,6 +84,7 @@ public class CubeWebViewHandler : MonoBehaviour
         if (arCamera == null)
         {
             arCamera = Camera.main;
+            Debug.LogWarning("Ar Camera не назначена в Инспекторе! Используется Camera.main: " + (arCamera != null ? arCamera.name : "NULL"));
         }
 
         Debug.Log("CubeWebViewHandler initialized. Platform: " + Application.platform);
@@ -96,6 +103,7 @@ public class CubeWebViewHandler : MonoBehaviour
     {
         Debug.Log("Opening WebView...");
         isWebViewActive = true;
+        currentZoom = 1.0f; // Сбрасываем масштаб при открытии
 
         if (cubeVisual != null)
             cubeVisual.SetActive(false);
@@ -130,7 +138,7 @@ public class CubeWebViewHandler : MonoBehaviour
 
         if (uiCanvas != null)
         {
-            Destroy(uiCanvas); // Уничтожит и loadingPanel, так как он дочерний
+            Destroy(uiCanvas);
             uiCanvas = null;
         }
     }
@@ -161,23 +169,18 @@ public class CubeWebViewHandler : MonoBehaviour
                 cb: (msg) => Debug.Log($"WebView JS: {msg}"),
                 err: (msg) => Debug.LogError($"WebView Error: {msg}"),
                 httpErr: (msg) => Debug.LogError($"WebView HTTP Error: {msg}"),
-
-                // ЭТОТ КОЛЛБЭК ВЫЗЫВАЕТСЯ, КОГДА СТРАНИЦА ПОЛНОСТЬЮ ЗАГРУЖЕНА
                 ld: (msg) =>
                 {
                     Debug.Log($"WebView Loaded: {msg}");
-                    // Скрываем панель загрузки, когда страница готова
                     if (loadingPanel != null)
                     {
                         loadingPanel.SetActive(false);
                         Debug.Log("Loading panel hidden.");
                     }
                 },
-
                 started: (msg) =>
                 {
                     Debug.Log($"WebView Started: {msg}");
-                    // Меняем текст, когда браузер начал загрузку
                     if (loadingText != null)
                     {
                         loadingText.text = "Загрузка содержимого...\nПожалуйста, подождите.";
@@ -188,26 +191,7 @@ public class CubeWebViewHandler : MonoBehaviour
                 transparent: true
             );
 
-            bool isPortrait = Screen.height > Screen.width;
-
-            if (isPortrait)
-            {
-                int targetWidth = Screen.width / 4;
-                int targetHeight = Screen.height / 5;
-                marginLeft = 20;
-                marginTop = 220;
-                marginRight = Screen.width - marginLeft - targetWidth;
-                marginBottom = Screen.height - marginTop - targetHeight;
-            }
-            else
-            {
-                marginLeft = (int)(Screen.width * 0.6f);
-                marginTop = (int)(Screen.height * 0.15f);
-                marginRight = (int)(Screen.width * 0.05f);
-                int targetHeight = (int)(Screen.height * 0.4f);
-                marginBottom = Screen.height - marginTop - targetHeight;
-            }
-
+            CalculateInitialMargins();
             UpdateWebViewMargins();
             webViewObject.SetVisibility(true);
 
@@ -226,6 +210,37 @@ public class CubeWebViewHandler : MonoBehaviour
 #endif
     }
 
+    // Расчет начальных отступов на основе ориентации экрана
+    void CalculateInitialMargins()
+    {
+        bool isPortrait = Screen.height > Screen.width;
+
+        if (isPortrait)
+        {
+            // Вертикальный режим: компактное окно
+            int targetWidth = (int)(Screen.width / 4f * currentZoom);
+            int targetHeight = (int)(Screen.height / 5f * currentZoom);
+
+            // Центрируем окно
+            marginLeft = (Screen.width - targetWidth) / 2;
+            marginTop = 220; // Отступ сверху для кнопок
+            marginRight = Screen.width - marginLeft - targetWidth;
+            marginBottom = Screen.height - marginTop - targetHeight;
+        }
+        else
+        {
+            // Горизонтальный режим: окно справа
+            marginLeft = (int)(Screen.width * 0.6f);
+            marginTop = (int)(Screen.height * 0.15f * currentZoom);
+            marginRight = (int)(Screen.width * 0.05f);
+
+            int targetHeight = (int)(Screen.height * 0.4f * currentZoom);
+            marginBottom = Screen.height - marginTop - targetHeight;
+        }
+
+        Debug.Log($"Margins calculated. Zoom: {currentZoom:F2}, L:{marginLeft}, T:{marginTop}, R:{marginRight}, B:{marginBottom}");
+    }
+
     void CreateUI()
     {
         uiCanvas = new GameObject("WebViewUI_Canvas");
@@ -238,21 +253,19 @@ public class CubeWebViewHandler : MonoBehaviour
         scaler.referenceResolution = new Vector2(1920, 1080);
         uiCanvas.AddComponent<GraphicRaycaster>();
 
-        // СОЗДАНИЕ ПАНЕЛИ ЗАГРУЗКИ
+        // Панель загрузки
         loadingPanel = new GameObject("LoadingPanel");
         loadingPanel.transform.SetParent(uiCanvas.transform, false);
 
         RectTransform loadRect = loadingPanel.AddComponent<RectTransform>();
-        loadRect.anchorMin = Vector2.zero;      // Растягиваем на весь экран
+        loadRect.anchorMin = Vector2.zero;
         loadRect.anchorMax = Vector2.one;
         loadRect.sizeDelta = Vector2.zero;
         loadRect.anchoredPosition = Vector2.zero;
 
-        // Темный полупрозрачный фон
         Image loadBg = loadingPanel.AddComponent<Image>();
         loadBg.color = new Color(0.1f, 0.1f, 0.1f, 0.85f);
 
-        // Текст загрузки
         GameObject textObj = new GameObject("LoadingText");
         textObj.transform.SetParent(loadingPanel.transform, false);
 
@@ -268,7 +281,7 @@ public class CubeWebViewHandler : MonoBehaviour
         loadingText.alignment = TextAnchor.MiddleCenter;
         loadingText.font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
 
-        // Создаем верхнюю панель для кнопок управления
+        // Панель кнопок управления (теперь 7 кнопок)
         GameObject buttonPanel = new GameObject("ButtonPanel");
         buttonPanel.transform.SetParent(uiCanvas.transform, false);
         RectTransform panelRect = buttonPanel.AddComponent<RectTransform>();
@@ -281,18 +294,22 @@ public class CubeWebViewHandler : MonoBehaviour
         Image panelImage = buttonPanel.AddComponent<Image>();
         panelImage.color = new Color(0, 0, 0, 0.8f);
 
-        float buttonSize = 120f;
-        float spacing = 160f;
-        float startX = -320f;
+        // Размещаем 7 кнопок: ← → ↑ ↓ + - X
+        float buttonSize = 100f; // Чуть уменьшил размер кнопок
+        float spacing = 120f;
+        float totalWidth = buttonSize * 7 + spacing * 6;
+        float startX = -totalWidth / 2f + buttonSize / 2f;
 
-        CreateButton(buttonPanel, "←", startX, 0, buttonSize, OnMoveLeft);
-        CreateButton(buttonPanel, "→", startX + spacing, 0, buttonSize, OnMoveRight);
-        CreateButton(buttonPanel, "↑", startX + spacing * 2, 0, buttonSize, OnMoveUp);
-        CreateButton(buttonPanel, "↓", startX + spacing * 3, 0, buttonSize, OnMoveDown);
-        CreateButton(buttonPanel, "X", startX + spacing * 4, 0, buttonSize, CloseWebView, Color.red);
+        CreateButton(buttonPanel, "←", startX, 0, buttonSize, OnMoveLeft, new Color(0.3f, 0.5f, 0.8f));
+        CreateButton(buttonPanel, "→", startX + buttonSize + spacing, 0, buttonSize, OnMoveRight, new Color(0.3f, 0.5f, 0.8f));
+        CreateButton(buttonPanel, "↑", startX + (buttonSize + spacing) * 2, 0, buttonSize, OnMoveUp, new Color(0.3f, 0.5f, 0.8f));
+        CreateButton(buttonPanel, "↓", startX + (buttonSize + spacing) * 3, 0, buttonSize, OnMoveDown, new Color(0.3f, 0.5f, 0.8f));
+        CreateButton(buttonPanel, "+", startX + (buttonSize + spacing) * 4, 0, buttonSize, OnZoomIn, new Color(0.2f, 0.7f, 0.3f));
+        CreateButton(buttonPanel, "-", startX + (buttonSize + spacing) * 5, 0, buttonSize, OnZoomOut, new Color(0.8f, 0.5f, 0.2f));
+        CreateButton(buttonPanel, "X", startX + (buttonSize + spacing) * 6, 0, buttonSize, CloseWebView, Color.red);
     }
 
-    void CreateButton(GameObject parent, string text, float xPos, float yPos, float size, UnityEngine.Events.UnityAction onClick, Color? bgColor = null)
+    void CreateButton(GameObject parent, string text, float xPos, float yPos, float size, UnityEngine.Events.UnityAction onClick, Color bgColor)
     {
         GameObject btnObj = new GameObject($"Button_{text}");
         btnObj.transform.SetParent(parent.transform, false);
@@ -304,7 +321,7 @@ public class CubeWebViewHandler : MonoBehaviour
         btnRect.anchoredPosition = new Vector2(xPos, yPos);
 
         Image btnImage = btnObj.AddComponent<Image>();
-        btnImage.color = bgColor ?? new Color(0.4f, 0.4f, 0.4f, 0.9f);
+        btnImage.color = bgColor;
 
         Button btn = btnObj.AddComponent<Button>();
         btn.onClick.AddListener(onClick);
@@ -331,6 +348,7 @@ public class CubeWebViewHandler : MonoBehaviour
         }
     }
 
+    // === МЕТОДЫ ПЕРЕМЕЩЕНИЯ ===
     void OnMoveLeft()
     {
         if (marginLeft > 0) { marginLeft -= moveStep; marginRight += moveStep; UpdateWebViewMargins(); }
@@ -349,6 +367,72 @@ public class CubeWebViewHandler : MonoBehaviour
     void OnMoveDown()
     {
         if (marginBottom > 0) { marginTop += moveStep; marginBottom -= moveStep; UpdateWebViewMargins(); }
+    }
+
+    // === МЕТОДЫ МАСШТАБИРОВАНИЯ ===
+    void OnZoomIn()
+    {
+        if (currentZoom < maxZoom)
+        {
+            currentZoom = Mathf.Min(maxZoom, currentZoom + zoomStep);
+            ApplyZoom();
+            Debug.Log($"Zoom In: {currentZoom:F2}");
+        }
+    }
+
+    void OnZoomOut()
+    {
+        if (currentZoom > minZoom)
+        {
+            currentZoom = Mathf.Max(minZoom, currentZoom - zoomStep);
+            ApplyZoom();
+            Debug.Log($"Zoom Out: {currentZoom:F2}");
+        }
+    }
+
+    // Применение текущего масштаба к окну
+    void ApplyZoom()
+    {
+        bool isPortrait = Screen.height > Screen.width;
+
+        if (isPortrait)
+        {
+            // В портретном режиме пересчитываем размеры на основе масштаба
+            int baseWidth = Screen.width / 4;
+            int baseHeight = Screen.height / 5;
+
+            int targetWidth = (int)(baseWidth * currentZoom);
+            int targetHeight = (int)(baseHeight * currentZoom);
+
+            // Сохраняем центр окна
+            int centerX = marginLeft + (Screen.width - marginLeft - marginRight) / 2;
+            int centerY = marginTop + (Screen.height - marginTop - marginBottom) / 2;
+
+            // Пересчитываем отступы для сохранения позиции центра
+            marginLeft = centerX - targetWidth / 2;
+            marginRight = Screen.width - marginLeft - targetWidth;
+            marginTop = Mathf.Max(220, centerY - targetHeight / 2); // Не даем залезть на кнопки
+            marginBottom = Screen.height - marginTop - targetHeight;
+        }
+        else
+        {
+            // В ландшафтном режиме
+            int baseWidth = (int)(Screen.width * 0.35f);
+            int baseHeight = (int)(Screen.height * 0.4f);
+
+            int targetWidth = (int)(baseWidth * currentZoom);
+            int targetHeight = (int)(baseHeight * currentZoom);
+
+            int centerX = marginLeft + (Screen.width - marginLeft - marginRight) / 2;
+            int centerY = marginTop + (Screen.height - marginTop - marginBottom) / 2;
+
+            marginLeft = centerX - targetWidth / 2;
+            marginRight = Screen.width - marginLeft - targetWidth;
+            marginTop = Mathf.Max(220, centerY - targetHeight / 2);
+            marginBottom = Screen.height - marginTop - targetHeight;
+        }
+
+        UpdateWebViewMargins();
     }
 
     void OnDestroy()
