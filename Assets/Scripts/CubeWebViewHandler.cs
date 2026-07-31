@@ -11,7 +11,7 @@ public class CubeWebViewHandler : MonoBehaviour
     public float webViewDistance = 0.15f;
 
     [Header("References")]
-    [Tooltip("Визуальная модель куба (опционально)")]
+    [Tooltip("Визуальная модель куба ")]
     public GameObject cubeVisual;
 
     [Tooltip("AR камера для правильного позиционирования WebView")]
@@ -35,9 +35,9 @@ public class CubeWebViewHandler : MonoBehaviour
 
     // Масштабирование окна (в процентах от базового размера)
     private float currentZoom = 1.0f;
-    private float zoomStep = 0.15f; // Шаг масштабирования (15%)
-    private float minZoom = 0.5f;   // Минимальный масштаб (50%)
-    private float maxZoom = 2.0f;   // Максимальный масштаб (200%)
+    private float zoomStep = 0.4f; // Шаг масштабирования 30%
+    private float minZoom = 0.5f;   // Минимальный масштаб 50%
+    private float maxZoom = 5.0f;   // Максимальный масштаб 200%
 
     void Start()
     {
@@ -53,12 +53,12 @@ public class CubeWebViewHandler : MonoBehaviour
             if (scannedData.StartsWith("http://") || scannedData.StartsWith("https://"))
             {
                 url = scannedData;
-                Debug.Log("✓ Это прямая ссылка. Будет открыт URL: " + url);
+                Debug.Log("Это прямая ссылка. Будет открыт URL: " + url);
             }
             else
             {
                 url = "https://www.google.com";
-                Debug.Log("✓ Это не ссылка. Будет открыта главная страница Google.");
+                Debug.Log("Это не ссылка. Будет открыта главная страница Google.");
             }
 
             GameDataManager.LastScannedQR = null;
@@ -84,7 +84,6 @@ public class CubeWebViewHandler : MonoBehaviour
         if (arCamera == null)
         {
             arCamera = Camera.main;
-            Debug.LogWarning("Ar Camera не назначена в Инспекторе! Используется Camera.main: " + (arCamera != null ? arCamera.name : "NULL"));
         }
 
         Debug.Log("CubeWebViewHandler initialized. Platform: " + Application.platform);
@@ -218,8 +217,8 @@ public class CubeWebViewHandler : MonoBehaviour
         if (isPortrait)
         {
             // Вертикальный режим: компактное окно
-            int targetWidth = (int)(Screen.width / 4f * currentZoom);
-            int targetHeight = (int)(Screen.height / 5f * currentZoom);
+            int targetWidth = (int)(Screen.width / 2f * currentZoom);    // 4
+            int targetHeight = (int)(Screen.height / 2.5f * currentZoom); //5
 
             // Центрируем окно
             marginLeft = (Screen.width - targetWidth) / 2;
@@ -281,22 +280,22 @@ public class CubeWebViewHandler : MonoBehaviour
         loadingText.alignment = TextAnchor.MiddleCenter;
         loadingText.font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
 
-        // Панель кнопок управления (теперь 7 кнопок)
+        // Панель кнопок управления 
         GameObject buttonPanel = new GameObject("ButtonPanel");
         buttonPanel.transform.SetParent(uiCanvas.transform, false);
         RectTransform panelRect = buttonPanel.AddComponent<RectTransform>();
 
         panelRect.anchorMin = new Vector2(0, 1);
         panelRect.anchorMax = new Vector2(1, 1);
-        panelRect.sizeDelta = new Vector2(0, 200);
+        panelRect.sizeDelta = new Vector2(0, 250);
         panelRect.anchoredPosition = new Vector2(0, -100);
 
         Image panelImage = buttonPanel.AddComponent<Image>();
         panelImage.color = new Color(0, 0, 0, 0.8f);
 
-        // Размещаем 7 кнопок: ← → ↑ ↓ + - X
-        float buttonSize = 100f; // Чуть уменьшил размер кнопок
-        float spacing = 120f;
+        // Размещаем 7 кнопок:
+        float buttonSize = 180f; 
+        float spacing = 100f;
         float totalWidth = buttonSize * 7 + spacing * 6;
         float startX = -totalWidth / 2f + buttonSize / 2f;
 
@@ -334,7 +333,7 @@ public class CubeWebViewHandler : MonoBehaviour
 
         Text textComponent = textObj.AddComponent<Text>();
         textComponent.text = text;
-        textComponent.fontSize = 50;
+        textComponent.fontSize = 100;
         textComponent.color = Color.white;
         textComponent.alignment = TextAnchor.MiddleCenter;
         textComponent.font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
@@ -348,7 +347,7 @@ public class CubeWebViewHandler : MonoBehaviour
         }
     }
 
-    // === МЕТОДЫ ПЕРЕМЕЩЕНИЯ ===
+    // МЕТОДЫ ПЕРЕМЕЩЕНИЯ
     void OnMoveLeft()
     {
         if (marginLeft > 0) { marginLeft -= moveStep; marginRight += moveStep; UpdateWebViewMargins(); }
@@ -369,7 +368,7 @@ public class CubeWebViewHandler : MonoBehaviour
         if (marginBottom > 0) { marginTop += moveStep; marginBottom -= moveStep; UpdateWebViewMargins(); }
     }
 
-    // === МЕТОДЫ МАСШТАБИРОВАНИЯ ===
+    // МЕТОДЫ МАСШТАБИРОВАНИЯ
     void OnZoomIn()
     {
         if (currentZoom < maxZoom)
@@ -398,8 +397,8 @@ public class CubeWebViewHandler : MonoBehaviour
         if (isPortrait)
         {
             // В портретном режиме пересчитываем размеры на основе масштаба
-            int baseWidth = Screen.width / 4;
-            int baseHeight = Screen.height / 5;
+            int baseWidth = Screen.width / 2;
+            int baseHeight = Screen.height / 2;
 
             int targetWidth = (int)(baseWidth * currentZoom);
             int targetHeight = (int)(baseHeight * currentZoom);
