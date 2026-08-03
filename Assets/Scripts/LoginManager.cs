@@ -3,6 +3,7 @@ using UnityEngine;
 using UnityEngine.SceneManagement;
 using UnityEngine.UI;
 using TMPro;
+using ArInventory.Local;
 
 // форма входа: отдел + ФИО + пароль
 public class LoginManager : MonoBehaviour
@@ -17,7 +18,8 @@ public class LoginManager : MonoBehaviour
     private void Start()
     {
         // Гарантируем, что ApiClient существует
-        ApiClient.GetOrCreate();
+        //ApiClient.GetOrCreate();
+        LocalClient.GetOrCreate();
 
         if (loginButton != null)
             loginButton.onClick.AddListener(OnLoginClicked);
@@ -35,7 +37,8 @@ public class LoginManager : MonoBehaviour
     {
         SetStatus("Загрузка отделов...");
 
-        ApiClient.Instance.GetDepartments(
+        //ApiClient.Instance.GetDepartments(
+        LocalClient.Instance.GetDepartments(
             onSuccess: names =>
             {
                 if (departmentDropdown == null)
@@ -94,8 +97,9 @@ public class LoginManager : MonoBehaviour
 
         SetStatus("Выполняется вход...");
         SetLoginEnabled(false);
-
-        ApiClient.Instance.Login(
+        
+        //ApiClient.Instance.Login(
+        LocalClient.Instance.Login(
             fullName,
             department,
             password,

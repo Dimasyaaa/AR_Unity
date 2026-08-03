@@ -1,6 +1,7 @@
 using UnityEngine;
 using UnityEngine.SceneManagement;
 using UnityEngine.UI;
+using ArInventory.Local;
 
 // Управляет логикой главного меню, обработкой нажатий кнопок и переходом в AR-сцену
 public class MainMenuManager : MonoBehaviour
@@ -19,6 +20,8 @@ public class MainMenuManager : MonoBehaviour
 
     void Start()
     {
+        LocalClient.GetOrCreate();
+
         if (userInfoText != null)
         {
             userInfoText.text = SessionManager.IsLoggedIn
@@ -63,9 +66,11 @@ public class MainMenuManager : MonoBehaviour
 
         // Отправляем факт сканирования на сервер,
         // если пользователь вошел и ApiClient существует.
-        if (ApiClient.Instance != null && SessionManager.IsLoggedIn)
+        //if (ApiClient.Instance != null && SessionManager.IsLoggedIn)
+        if (LocalClient.Instance != null && SessionManager.IsLoggedIn)
         {
-            ApiClient.Instance.SendScan(
+            //ApiClient.Instance.SendScan(
+            LocalClient.Instance.SendScan(
                 qrData,
                 onSuccess: response =>
                     Debug.Log($"[Menu] Scan saved: {response.objectName} ({response.result})"),
