@@ -18,6 +18,10 @@ public class LoginManager : MonoBehaviour
     private void Start()
     {
         // Гарантируем, что ApiClient существует
+        // создаем и открываем базу данных!
+        LocalDatabaseExt.GetOrCreate();
+
+        // создаем клиент, который будет к ней обращаться
         //ApiClient.GetOrCreate();
         LocalClient.GetOrCreate();
 
@@ -29,8 +33,26 @@ public class LoginManager : MonoBehaviour
             passwordInput.contentType = TMP_InputField.ContentType.Password;
             passwordInput.ForceLabelUpdate();
         }
+        
+        // Подписываемся на событие готовности базы
+        LocalDatabase.OnDatabaseReady += LoadDepartments;
 
-        LoadDepartments();
+        // Если база вдруг уже готова (например, при возврате на сцену)
+        if (LocalDatabase.Instance != null && LocalDatabase.Instance.IsReady)
+        {
+            LoadDepartments();
+        }
+        else
+        {
+            // Иначе показываем статус ожидания
+            SetStatus("Подготовка базы данных...");
+        }
+    }
+
+    //для избежания утечек памяти
+    private void OnDestroy()
+    {
+        LocalDatabase.OnDatabaseReady -= LoadDepartments;
     }
 
     private void LoadDepartments()

@@ -8,6 +8,7 @@ namespace ArInventory.Local
     public class LocalDatabase : MonoBehaviour
     {
         public static LocalDatabase Instance { get; private set; }
+        public static event System.Action OnDatabaseReady;
 
         private SQLiteConnection db;
         public bool IsReady { get; private set; }
@@ -102,6 +103,7 @@ namespace ArInventory.Local
             long qrCount = db.Table<LocalQrCode>().Count();
 
             Debug.Log($"[DB] Ready. Users: {usersCount}, QR: {qrCount}");
+            OnDatabaseReady?.Invoke();
         }
 
         public SQLiteConnection Connection

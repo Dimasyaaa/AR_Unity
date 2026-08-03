@@ -9,7 +9,7 @@ public class ExportDatabaseTool : EditorWindow
 {
     private string connectionString =
         "Host=localhost;Port=5432;Database=ar_inventory;" +
-        "Username=postgres;Password=123456Qw;SSL Mode=Disable;";
+        "Username=postgres;Password=1234;SSL Mode=Disable;";
 
     [MenuItem("Tools/Export PostgreSQL → SQLite")]
     public static void ShowWindow()

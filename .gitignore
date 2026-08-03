@@ -7,7 +7,7 @@
 [Ll]ogs/
 [Uu]ser[Ss]ettings/
 
-# XR Simulation files (которые сегодня ломали сборку)
+# XR Simulation files 
 Assets/XR/Temp/
 Assets/XR/UserSimulationSettings/
 Assets/XR/Resources/XRSimulationRuntimeSettings.asset
@@ -34,8 +34,31 @@ Thumbs.db
 
 # файлы CMake (IL2CPP)
 .utmp/
+
 # восстановления Unity
 Assets/_Recovery/
 *.apk
 *.aab
 *.zip
+
+# Локальная база данных 
+Assets/StreamingAssets/inventory.db
+*.db
+
+# NuGet пакеты (кэш NuGetForUnity)
+Assets/Packages/
+
+# Crashlytics
+sysinfo.txt
+
+# Memory Captures
+MemoryCaptures/
+
+# Recordings
+Recordings/
+
+# Asset Store downloads
+Assets/AssetStoreTools*
+
+# Burst Debug Info
+KgmkAR_BurstDebugInformation_DoNotShip/
