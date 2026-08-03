@@ -14,8 +14,18 @@ public class MainMenuManager : MonoBehaviour
     [SerializeField] private Button exitButton;
     [SerializeField] private Button closeButton;
 
+    [Header("User Info")]
+    [SerializeField] private TMPro.TMP_Text userInfoText;
+
     void Start()
     {
+        if (userInfoText != null)
+        {
+            userInfoText.text = SessionManager.IsLoggedIn
+                ? $"Пользователь: {SessionManager.FullName}"
+                : "Пользователь: не авторизован";
+        }
+
         // Привязываем методы к событиям нажатия кнопок
         scanButton.onClick.AddListener(OnScanClicked);
         instructionsButton.onClick.AddListener(OnInstructionsClicked);
@@ -50,6 +60,22 @@ public class MainMenuManager : MonoBehaviour
         // Отписываемся от события, чтобы избежать дублирования вызовов
         if (QRScanner.Instance != null)
             QRScanner.Instance.OnQRScanned -= OnQRScanned;
+
+        // Отправляем факт сканирования на сервер,
+        // если пользователь вошел и ApiClient существует.
+        if (ApiClient.Instance != null && SessionManager.IsLoggedIn)
+        {
+            ApiClient.Instance.SendScan(
+                qrData,
+                onSuccess: response =>
+                    Debug.Log($"[Menu] Scan saved: {response.objectName} ({response.result})"),
+                onError: err =>
+                    Debug.LogWarning($"[Menu] Scan not saved: {err}"));
+        }
+        else
+        {
+            Debug.LogWarning("[Menu] Scan not saved: пользователь не вошел или нет ApiClient");
+        }
 
         // Загружаем основную AR-сцену
         SceneManager.LoadScene("SampleScene");
