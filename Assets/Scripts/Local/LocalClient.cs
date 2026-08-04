@@ -189,6 +189,44 @@ namespace ArInventory.Local
             onSuccess?.Invoke(response);
         }
 
+        // Записывает взаимодействие с калькулятором в журнал (inventory_sessions)
+        public void LogCalculator(
+            string expression,
+            string result,
+            Action onSuccess,
+            Action<string> onError)
+        {
+            if (!LocalDatabase.Instance.IsReady)
+            {
+                onError?.Invoke("База данных еще не готова");
+                return;
+            }
+
+            if (!SessionManager.IsLoggedIn)
+            {
+                onError?.Invoke("Пользователь не авторизован");
+                return;
+            }
+
+            // Ищем QR-код калькулятора, чтобы привязать запись к нему
+            LocalQrCode calcQr = LocalDatabase.Instance.Connection
+                .Table<LocalQrCode>()
+                .ToList()
+                .FirstOrDefault(q => q.code == "CALC_001");
+
+            var session = new LocalInventorySession
+            {
+                user_id = SessionManager.UserId,
+                qr_code_id = calcQr?.id,
+                action = "scan",
+                action_time = DateTime.Now,
+                comment = $"Калькулятор: {expression} = {result}"
+            };
+
+            LocalDatabase.Instance.Connection.Insert(session);
+            onSuccess?.Invoke();
+        }
+
         // Оставляет только буквы (убирает пробелы, точки, регистр)
         private static string CleanString(string s)
         {
