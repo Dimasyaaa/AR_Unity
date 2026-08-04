@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="ru">
+	<head>
+		<meta charset="UTF-8">
+			<meta name="viewport" content="width=device-width, initial-scale=1.0">
+				<title>AR Inventory -- Админка</title>
+				<link rel="stylesheet" href="style.css">
+</head>
+	<body>
+		<div class="container">
+			<header>
+				<h1>AR Inventory</h1>
+				<div class="hint">Панель администратора</div>
+			</header>
+
+			<div class="tabs">
+				<button class="tab active" data-tab="users">Пользователи</button>
+				<button class="tab" data-tab="qr">QR-коды</button>
+				<button class="tab" data-tab="sessions">Журнал</button>
+			</div>
+
+			<div class="panel" id="panel-users">
+				<div class="panel-header">
+					<h2>Пользователи</h2>
+					<div class="header-controls">
+						<input type="text" class="search" id="search-users" placeholder="Поиск...">
+							<button class="btn btn-primary" onclick="openUserModal()">Новый пользователь</button>
+						</div>
+				</div>
+				<table>
+					<thead>
+						<tr>
+							<th>ID</th>
+							<th>ФИО</th>
+							<th>Отдел</th>
+							<th>Статус</th>
+							<th>Создан</th>
+							<th></th>
+						</tr>
+					</thead>
+					<tbody id="users-body"></tbody>
+				</table>
+			</div>
+
+			<div class="panel" id="panel-qr" style="display:none;">
+				<div class="panel-header">
+					<h2>QR-коды</h2>
+					<div class="header-controls">
+						<input type="text" class="search" id="search-qr" placeholder="Поиск...">
+							<button class="btn btn-primary" onclick="openQrModal()">Новый QR-код</button>
+						</div>
+				</div>
+				<table>
+					<thead>
+						<tr>
+							<th>ID</th>
+							<th>Код</th>
+							<th>Объект</th>
+							<th>Статус</th>
+							<th>Создан</th>
+							<th></th>
+						</tr>
+					</thead>
+					<tbody id="qr-body"></tbody>
+				</table>
+			</div>
+
+			<div class="panel" id="panel-sessions" style="display:none;">
+				<div class="panel-header">
+					<h2>Журнал событий (последние 500)</h2>
+					<button class="btn btn-secondary" onclick="loadSessions()">Обновить</button>
+				</div>
+				<table>
+					<thead>
+						<tr>
+							<th>Время</th>
+							<th>Пользователь</th>
+							<th>Отдел</th>
+							<th>Действие</th>
+							<th>QR-код</th>
+							<th>Объект</th>
+							<th>Комментарий</th>
+						</tr>
+					</thead>
+					<tbody id="sessions-body"></tbody>
+				</table>
+			</div>
+		</div>
+
+		<div class="modal-overlay" id="modal-user">
+			<div class="modal">
+				<h3 id="user-modal-title">Новый пользователь</h3>
+				<input type="hidden" id="user-id">
+					<div class="form-group">
+						<label>ФИО</label>
+						<input type="text" id="user-fullName" placeholder="Иванов И.И.">
+      </div>
+					<div class="form-group">
+						<label>Отдел</label>
+						<select id="user-department"></select>
+					</div>
+					<div class="form-group" id="user-department-new-group" style="display:none;">
+						<label>Новый отдел</label>
+						<input type="text" id="user-department-new" placeholder="Введите название нового отдела">
+      </div>
+					<div class="form-group">
+						<label>Пароль</label>
+						<input type="text" id="user-password" placeholder="Оставьте пустым, чтобы не менять">
+							<div class="hint">При редактировании оставьте поле пустым, чтобы сохранить старый пароль.</div>
+						</div>
+					<div class="form-group">
+						<div class="checkbox-row">
+							<input type="checkbox" id="user-isActive" checked="">
+								<label for="user-isActive" style="margin:0;">Активен</label>
+							</div>
+					</div>
+					<div class="modal-actions">
+						<button class="btn btn-secondary" onclick="closeModal('modal-user')">Отмена</button>
+						<button class="btn btn-primary" onclick="saveUser()">Сохранить</button>
+					</div>
+				</div>
+		</div>
+
+		<div class="modal-overlay" id="modal-qr">
+			<div class="modal">
+				<h3 id="qr-modal-title">Новый QR-код</h3>
+				<input type="hidden" id="qr-id">
+					<div class="form-group">
+						<label>Код</label>
+						<input type="text" id="qr-code" placeholder="TEST_QR_001">
+      </div>
+					<div class="form-group">
+						<label>Название объекта</label>
+						<input type="text" id="qr-objectName" placeholder="Описание объекта">
+      </div>
+					<div class="form-group">
+						<div class="checkbox-row">
+							<input type="checkbox" id="qr-isActive" checked="">
+								<label for="qr-isActive" style="margin:0;">Активен</label>
+							</div>
+					</div>
+					<div class="modal-actions">
+						<button class="btn btn-secondary" onclick="closeModal('modal-qr')">Отмена</button>
+						<button class="btn btn-primary" onclick="saveQr()">Сохранить</button>
+					</div>
+				</div>
+		</div>
+
+		<div class="toast" id="toast"></div>
+
+		<script src="main.js"></script>
+	</body>
+</html>

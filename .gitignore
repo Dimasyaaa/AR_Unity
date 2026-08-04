@@ -62,3 +62,17 @@ Assets/AssetStoreTools*
 
 # Burst Debug Info
 KgmkAR_BurstDebugInformation_DoNotShip/
+
+# Backend (.NET / ASP.NET Core)
+# Папки сборки бэкенда
+Backend/bin/
+Backend/obj/
+
+# Локальные настройки с паролем от БД 
+Backend/appsettings.Development.json
+
+# Локальные настройки запуска 
+Backend/Properties/launchSettings.json
+
+!Backend/*.csproj
+!Backend/*.sln
