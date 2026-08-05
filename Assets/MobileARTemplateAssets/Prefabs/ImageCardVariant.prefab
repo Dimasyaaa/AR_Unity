@@ -237,8 +237,10 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 11a93bb51c88ed342b471cbc8dbbca81, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::ImageCardController
-  sheet1: {fileID: 2800000, guid: bb274a1c6156e584ba7aacf7d906938b, type: 3}
-  sheet2: {fileID: 2800000, guid: 67dc6d5f001c2014685b97c842035fcb, type: 3}
+  maxImageWidth: 500
+  maxImageHeight: 640
+  sheet1: {fileID: 2800000, guid: cd850ecbb3df35342af1325e8b0ce901, type: 3}
+  sheet2: {fileID: 2800000, guid: 0525bbdf283aff946983c5c538b1d1a7, type: 3}
 --- !u!4 &8993281605715182165 stripped
 Transform:
   m_CorrespondingSourceObject: {fileID: 4183465048131118092, guid: cec25213e5ba74da1ae7d3e2036e000d, type: 3}
