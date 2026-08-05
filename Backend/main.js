@@ -304,8 +304,12 @@ async function loadSessions() {
     const data = await res.json();
     const tbody = document.getElementById('sessions-body');
 
+    // Обновляем состояние кнопки очистки
+    const clearBtn = document.getElementById('clear-sessions-btn');
+    if (clearBtn) clearBtn.disabled = data.length === 0;
+
     if (data.length === 0) {
-      tbody.innerHTML = '<tr><td colspan="7" class="empty">Нет событий</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="8" class="empty">Нет событий</td></tr>';
       return;
     }
 
@@ -323,11 +327,44 @@ async function loadSessions() {
           <td>${s.qrCode ? '<code>' + escapeHtml(s.qrCode) + '</code>' : '--'}</td>
           <td>${s.qrObjectName ? escapeHtml(s.qrObjectName) : '--'}</td>
           <td>${s.comment ? escapeHtml(s.comment) : '--'}</td>
+          <td>
+            <div class="actions">
+              <button class="btn btn-danger btn-sm" onclick="deleteSession(${s.id})">Удалить</button>
+            </div>
+          </td>
         </tr>
       `;
     }).join('');
   } catch (e) {
     toast('Ошибка загрузки: ' + e.message, 'error');
+  }
+}
+
+// Удаление одной записи журнала
+async function deleteSession(id) {
+  if (!confirm('Удалить эту запись из журнала?')) return;
+  try {
+    const res = await fetch(`${API}/api/admin/sessions/${id}`, { method: 'DELETE' });
+    const data = await res.json();
+    if (!res.ok) return toast(data.message || 'Ошибка', 'error');
+    toast(data.message);
+    loadSessions();
+  } catch (e) {
+    toast('Ошибка сети', 'error');
+  }
+}
+
+// Очистка всего журнала
+async function clearAllSessions() {
+  if (!confirm('Удалить ВСЕ записи журнала? Действие необратимо.')) return;
+  try {
+    const res = await fetch(`${API}/api/admin/sessions`, { method: 'DELETE' });
+    const data = await res.json();
+    if (!res.ok) return toast(data.message || 'Ошибка', 'error');
+    toast(data.message);
+    loadSessions();
+  } catch (e) {
+    toast('Ошибка сети', 'error');
   }
 }
 

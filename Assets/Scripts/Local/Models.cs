@@ -36,5 +36,7 @@ namespace ArInventory.Local
         public string action { get; set; }
         public System.DateTime action_time { get; set; }
         public string comment { get; set; }
+
+        public bool synced {  get; set; }
     }
 }

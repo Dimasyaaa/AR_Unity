@@ -68,7 +68,12 @@
 			<div class="panel" id="panel-sessions" style="display:none;">
 				<div class="panel-header">
 					<h2>Журнал событий (последние 500)</h2>
-					<button class="btn btn-secondary" onclick="loadSessions()">Обновить</button>
+					<div class="header-controls">
+						<button class="btn btn-secondary" onclick="loadSessions()">Обновить</button>
+						<button id="clear-sessions-btn" class="btn btn-danger" onclick="clearAllSessions()" disabled="">
+							Очистить журнал
+						</button>
+					</div>
 				</div>
 				<table>
 					<thead>
@@ -80,6 +85,7 @@
 							<th>QR-код</th>
 							<th>Объект</th>
 							<th>Комментарий</th>
+							<th></th>
 						</tr>
 					</thead>
 					<tbody id="sessions-body"></tbody>

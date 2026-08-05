@@ -5,17 +5,25 @@ using Microsoft.Extensions.DependencyInjection;
 using Npgsql;
 using System;
 using System.Collections.Generic;
+using System.IO;
+using System.Linq;
 
 var builder = WebApplication.CreateBuilder(args);
 
 // настройки подключения к бд
-var connectionString =
-    "Host=localhost;" +
-    "Port=5432;" +
-    "Database=ar_inventory;" +
-    "Username=postgres;" +
-    "Password=123456Qw;" +
-    "SSL Mode=Disable;";
+// Пароль читается из appsettings.Development.json (у каждого компьютера свой).
+// Запасной вариант на случай отсутствия файла:
+var connectionString = builder.Configuration.GetConnectionString("DefaultConnection");
+if (string.IsNullOrEmpty(connectionString))
+{
+    connectionString =
+        "Host=localhost;" +
+        "Port=5432;" +
+        "Database=ar_inventory;" +
+        "Username=postgres;" +
+        "Password=123456Qw;" +
+        "SSL Mode=Disable;";
+}
 
 builder.Services.AddEndpointsApiExplorer();
 
@@ -758,6 +766,116 @@ app.MapGet("/api/admin/sessions", () =>
 .WithDescription("Логины и сканирования с информацией о пользователе и (для сканирований) о QR-коде. Сортировка по убыванию времени.")
 .Produces(200);
 
+// АДМИНКА: удаление одной записи журнала
+app.MapDelete("/api/admin/sessions/{id:long}", (long id) =>
+{
+    using var conn = new NpgsqlConnection(connectionString);
+    conn.Open();
+
+    using var cmd = new NpgsqlCommand("DELETE FROM inventory_sessions WHERE id = @id", conn);
+    cmd.Parameters.AddWithValue("@id", id);
+
+    var affected = cmd.ExecuteNonQuery();
+    return affected > 0
+        ? Results.Ok(new { success = true, message = "Запись удалена" })
+        : Results.NotFound(new { success = false, message = "Запись не найдена" });
+})
+.WithTags("Admin: Sessions")
+.WithSummary("Удаление одной записи журнала")
+.WithDescription("Удаляет запись по id. Возможные ответы: 200 -- удалена, 404 -- не найдена.")
+.Produces(200)
+.Produces(404);
+
+// АДМИНКА: очистка всего журнала
+app.MapDelete("/api/admin/sessions", () =>
+{
+    using var conn = new NpgsqlConnection(connectionString);
+    conn.Open();
+
+    using var cmd = new NpgsqlCommand("DELETE FROM inventory_sessions", conn);
+    var affected = cmd.ExecuteNonQuery();
+
+    return Results.Ok(new { success = true, message = $"Удалено записей: {affected}" });
+})
+.WithTags("Admin: Sessions")
+.WithSummary("Очистить весь журнал")
+.WithDescription("Удаляет все записи журнала. Используйте с осторожностью.")
+.Produces(200);
+
+// синхронизация приём записей с телефона
+app.MapPost("/api/sync/sessions", (SyncPayloadDto payload) =>
+{
+    if (payload?.items == null || payload.items.Count == 0)
+        return Results.Ok(new { imported = 0, skipped = 0 });
+
+    using var conn = new NpgsqlConnection(connectionString);
+    conn.Open();
+    int imported = 0, skipped = 0;
+
+    foreach (var s in payload.items)
+    {
+        long userId = 0;
+
+        // 1) Ищем по ФИО + отдел (надёжно, не зависит от ids)
+        if (!string.IsNullOrWhiteSpace(s.fullName) && !string.IsNullOrWhiteSpace(s.department))
+        {
+            using var ucmd = new NpgsqlCommand(@"
+                SELECT id FROM users
+                WHERE lower(full_name) = lower(@fn) AND lower(department) = lower(@dep)
+            ", conn);
+            ucmd.Parameters.AddWithValue("@fn", s.fullName.Trim());
+            ucmd.Parameters.AddWithValue("@dep", s.department.Trim());
+            var r = ucmd.ExecuteScalar();
+            if (r != null) userId = Convert.ToInt64(r);
+        }
+
+        // 2) Запасной вариант — по id
+        if (userId == 0)
+        {
+            using var ucmd2 = new NpgsqlCommand("SELECT id FROM users WHERE id = @id", conn);
+            ucmd2.Parameters.AddWithValue("@id", s.userId);
+            var r2 = ucmd2.ExecuteScalar();
+            if (r2 != null) userId = Convert.ToInt64(r2);
+        }
+
+        if (userId == 0) { skipped++; continue; }
+
+        // QR: если есть в базе — привязываем, иначе NULL
+        object qrParam = DBNull.Value;
+        if (s.qrCodeId > 0)
+        {
+            using var qcmd = new NpgsqlCommand("SELECT id FROM qr_codes WHERE id = @id", conn);
+            qcmd.Parameters.AddWithValue("@id", s.qrCodeId);
+            if (qcmd.ExecuteScalar() != null) qrParam = s.qrCodeId;
+        }
+
+        // Разбираем время из ISO-строки; если не вышло — берём текущее UTC
+        DateTime time = DateTime.UtcNow;
+        if (!string.IsNullOrWhiteSpace(s.actionTime) &&
+            DateTime.TryParse(s.actionTime,
+                System.Globalization.CultureInfo.InvariantCulture,
+                System.Globalization.DateTimeStyles.RoundtripKind, out var parsed))
+        {
+            time = DateTime.SpecifyKind(parsed, DateTimeKind.Utc);
+        }
+
+        using var cmd = new NpgsqlCommand(@"
+            INSERT INTO inventory_sessions (user_id, qr_code_id, action, comment, action_time)
+            VALUES (@userId, @qrId, @action, @comment, @time)
+        ", conn);
+        cmd.Parameters.AddWithValue("@userId", userId);
+        cmd.Parameters.AddWithValue("@qrId", qrParam);
+        cmd.Parameters.AddWithValue("@action", s.action);
+        cmd.Parameters.AddWithValue("@comment", string.IsNullOrEmpty(s.comment) ? (object)DBNull.Value : s.comment);
+        // ИСПРАВЛЕНО: используем уже распарсенную переменную time (UTC), а не s.actionTime (строка)
+        cmd.Parameters.AddWithValue("@time", time);
+        cmd.ExecuteNonQuery();
+        imported++;
+    }
+
+    return Results.Ok(new { imported, skipped });
+});
+
 app.Run();
 
 /// <summary>
@@ -843,4 +961,20 @@ public class QrDto
     /// Флаг активности. Неактивные коды игнорируются приложением при сканировании.
     /// </summary>
     public bool isActive { get; set; } = true;
+}
+
+public class SyncPayloadDto
+{
+    public List<SyncSessionDto> items { get; set; } = new();
+}
+
+public class SyncSessionDto
+{
+    public long userId { get; set; }
+    public long qrCodeId { get; set; }
+    public string action { get; set; } = string.Empty;
+    public string comment { get; set; } = string.Empty;
+    public string actionTime { get; set; } = string.Empty;
+    public string fullName { get; set; } = string.Empty;
+    public string department { get; set; } = string.Empty;
 }

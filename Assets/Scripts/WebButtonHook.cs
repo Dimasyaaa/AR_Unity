@@ -8,18 +8,22 @@ using UnityEngine.UI;
 // Вешается на кнопку "Button (Web)".
 // Показывает диалог выбора "Оверлей / AR-объект".
 // - Оверлей: сразу открывает WebView с меню управления, без объекта.
-// - AR-объект: ставит индекс карточки и включает тап-спавн (как калькулятор).
+// - AR-объект: ставит индекс карточки и включает тап-спавн 
 [RequireComponent(typeof(Button))]
 public class WebButtonHook : MonoBehaviour
 {
     [SerializeField] private float spawnDistance = 1.0f;
 
-    // Индекс WebCardVariant в списке ObjectSpawner (у тебя это 0)
+    // Индекс WebCardVariant в списке ObjectSpawner 
     [SerializeField] private int webCardIndex = 0;
 
     private UnityEngine.XR.Interaction.Toolkit.Samples.StarterAssets.ObjectSpawner objectSpawner;
-    private Behaviour spawnTrigger; // ARInteractorSpawnTrigger (на том же объекте)
+    private Behaviour spawnTrigger; // ARInteractorSpawnTrigger 
     private GameObject dialogCanvas;
+
+    // запоминаем последний отсканированный QR
+    private string lastScannedQR;
+    private bool subscribed;
 
     void Start()
     {
@@ -41,6 +45,40 @@ public class WebButtonHook : MonoBehaviour
 
         button.onClick.RemoveAllListeners();
         button.onClick.AddListener(ShowChoiceDialog);
+    }
+
+    // лениво подписываемся на событие сканирования (QRScanner может создаться позже)
+    void Update()
+    {
+        if (!subscribed && QRScanner.Instance != null)
+        {
+            QRScanner.Instance.OnQRScanned += HandleScan;
+            subscribed = true;
+            Debug.Log("[WebHook] Подписался на событие QRScanner");
+        }
+    }
+
+    // получаем код от сканера и сохраняем
+    private void HandleScan(string code)
+    {
+        lastScannedQR = code;
+        GameDataManager.LastScannedQR = code; // чтобы WebCardController тоже получил
+        Debug.Log($"[WebHook] Запомнен QR: {code}");
+    }
+
+    // отписываемся при уничтожении, чтобы не было утечки
+    private void OnDestroy()
+    {
+        if (subscribed && QRScanner.Instance != null)
+            QRScanner.Instance.OnQRScanned -= HandleScan;
+    }
+
+    // возвращает последний QR — свой или из GameDataManager
+    private string GetQR()
+    {
+        return !string.IsNullOrEmpty(lastScannedQR)
+            ? lastScannedQR
+            : (GameDataManager.LastScannedQR ?? "");
     }
 
     private void ShowChoiceDialog()
@@ -127,7 +165,7 @@ public class WebButtonHook : MonoBehaviour
         if (dialogCanvas != null) { Destroy(dialogCanvas); dialogCanvas = null; }
     }
 
-    // Режим "Оверлей": сразу WebView с меню управления, без объекта
+    // Режим Оверлей: сразу WebView с меню управления, без объекта
     private void OnOverlayChosen()
     {
         CloseDialog();
@@ -136,13 +174,13 @@ public class WebButtonHook : MonoBehaviour
         if (spawnTrigger != null)
             spawnTrigger.enabled = false;
 
-        string qrCode = GameDataManager.LastScannedQR ?? "";
+        string qrCode = GetQR();
         WebOverlayController.GetOrCreate().Open(ResolveUrl(qrCode), GetTitleForQR(qrCode));
 
-        Debug.Log("[WebHook] Режим Оверлей: открыт WebView с меню управления");
+        Debug.Log($"[WebHook] Режим Оверлей: открыт WebView для QR={qrCode}");
     }
 
-    // Режим "AR-объект": карточка через ObjectSpawner (тап по поверхности), как калькулятор
+    // Режим "AR-объект": карточка через ObjectSpawner (тап по поверхности)
     private void OnARObjectChosen()
     {
         CloseDialog();
@@ -160,12 +198,12 @@ public class WebButtonHook : MonoBehaviour
             return;
         }
 
-        // Выбираем префаб карточки (индекс 0) и разрешаем тап-спавн
+        // Выбираем префаб карточки  и разрешаем тап-спавн
         objectSpawner.SetSpawnObjectIndex(webCardIndex);
         if (spawnTrigger != null)
             spawnTrigger.enabled = true;
 
-        Debug.Log("[WebHook] Режим AR-объект: тапни по поверхности, чтобы поставить карточку");
+        Debug.Log($"[WebHook] Режим AR-объект: QR={GetQR()}, тапни по поверхности, чтобы поставить карточку");
     }
 
     private string GetTitleForQR(string qrCode)
