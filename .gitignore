@@ -7,6 +7,9 @@
 [Ll]ogs/
 [Uu]ser[Ss]ettings/
 
+# Recordings
+Recordings/
+
 # XR Simulation files 
 Assets/XR/Temp/
 Assets/XR/UserSimulationSettings/
@@ -62,6 +65,13 @@ Assets/AssetStoreTools*
 
 # Burst Debug Info
 KgmkAR_BurstDebugInformation_DoNotShip/
+
+# Android Keystores
+*.keystore
+*.jks
+*.key
+user.keystore
+local.properties
 
 # Backend (.NET / ASP.NET Core)
 # Папки сборки бэкенда
