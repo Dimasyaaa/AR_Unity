@@ -103,6 +103,7 @@ public class QRScanner : MonoBehaviour
         }
         else
         {
+            GameDataManager.LastScannedQR = result; 
             OnQRScanned?.Invoke(result);
         }
     }
@@ -111,6 +112,6 @@ public class QRScanner : MonoBehaviour
     private void TestScan()
     {
         isScanning = false;
-        OnQRScanned?.Invoke("TEST_QR_001");
+        GameDataManager.LastScannedQR = "TEST_QR_001";
     }
 }

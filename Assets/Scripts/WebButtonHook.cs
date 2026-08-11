@@ -170,14 +170,17 @@ public class WebButtonHook : MonoBehaviour
     {
         CloseDialog();
 
-        // Не даём спавнеру создавать объект по тапу
-        if (spawnTrigger != null)
-            spawnTrigger.enabled = false;
+        var r = QRResolver.Resolve(GameDataManager.LastScannedQR);
+        if (string.IsNullOrEmpty(r.url))
+        {
+            Debug.Log($"[WebHook] Оверлей: для QR нет ссылки — '{GameDataManager.LastScannedQR}'");
+            // Вместо google.com показываем сообщение (опционально через UI)
+            return;
+        }
 
-        string qrCode = GetQR();
-        WebOverlayController.GetOrCreate().Open(ResolveUrl(qrCode), GetTitleForQR(qrCode));
-
-        Debug.Log($"[WebHook] Режим Оверлей: открыт WebView для QR={qrCode}");
+        if (spawnTrigger != null) spawnTrigger.enabled = false;
+        WebOverlayController.GetOrCreate().Open(r.url, r.title);
+        Debug.Log($"[WebHook] Оверлей: title='{r.title}', url={r.url}");
     }
 
     // Режим "AR-объект": карточка через ObjectSpawner (тап по поверхности)
@@ -185,8 +188,8 @@ public class WebButtonHook : MonoBehaviour
     {
         CloseDialog();
 
-        // Защита от дубликатов
-        if (FindAnyObjectByType<WebCardController>() != null)
+        var existing = FindAnyObjectByType<WebCardController>();
+        if (existing != null)
         {
             Debug.Log("[WebHook] Карточка уже на сцене — не создаём вторую");
             return;
@@ -198,12 +201,13 @@ public class WebButtonHook : MonoBehaviour
             return;
         }
 
-        // Выбираем префаб карточки  и разрешаем тап-спавн
-        objectSpawner.SetSpawnObjectIndex(webCardIndex);
-        if (spawnTrigger != null)
-            spawnTrigger.enabled = true;
+        // Проверяем: если URL пуст — карточка всё равно покажет "QR не найден в базе",
+        // но спавним в любом случае — пользователь увидит название изделия.
+        var r = QRResolver.Resolve(GameDataManager.LastScannedQR);
+        Debug.Log($"[WebHook] AR-объект: title='{r.title}', url={r.url ?? "—"}, inDb={r.foundInDb}");
 
-        Debug.Log($"[WebHook] Режим AR-объект: QR={GetQR()}, тапни по поверхности, чтобы поставить карточку");
+        objectSpawner.SetSpawnObjectIndex(webCardIndex);
+        if (spawnTrigger != null) spawnTrigger.enabled = true;
     }
 
     private string GetTitleForQR(string qrCode)

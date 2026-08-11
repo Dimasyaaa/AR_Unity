@@ -3,54 +3,47 @@ using UnityEngine.UI;
 using TMPro;
 
 // Контроллер AR-карточки веб-страницы.
-// Вешается на префаб WebCardVariant. Показывает заголовок, URL и кнопки
-// "Открыть страницу" (запускает оверлей) и "Закрыть" (уничтожает объект).
-// Один экземпляр на сцене (защита от дубликатов, как у калькулятора).
+// Сам подтягивает данные из QRResolver в Start().
+// Один экземпляр на сцене.
 public class WebCardController : MonoBehaviour
 {
     private static WebCardController current;
 
     private TextMeshProUGUI titleText;
     private TextMeshProUGUI urlText;
+    private Button openBtn;
+    private GameObject openGo;
 
-    private string pageTitle = "Веб-страница";
-    private string pageUrl = "https://www.google.com";
+    private string pageTitle = "QR-код";
+    private string pageUrl;
 
-    public void SetData(string title, string url)
+    public bool IsPinned { get; set; }
+
+    public void Initialize(bool pinned)
     {
-        pageTitle = string.IsNullOrEmpty(title) ? "Веб-страница" : title;
-        pageUrl = string.IsNullOrEmpty(url) ? "https://www.google.com" : url;
-
-        if (titleText != null) titleText.text = pageTitle;
-        if (urlText != null) urlText.text = pageUrl;
+        IsPinned = pinned;
     }
 
     private void Start()
     {
-        if (current != null && current != this)
-        {
-            Destroy(gameObject);
-            return;
-        }
+        if (current != null && current != this) { Destroy(gameObject); return; }
         current = this;
 
+        // Автозаполнение из глобального LastScannedQR
+        var r = QRResolver.Resolve(GameDataManager.LastScannedQR);
+        pageTitle = r.title;
+        pageUrl = r.url;
+
+        if (!r.foundInDb && string.IsNullOrEmpty(pageUrl))
+            pageTitle = "QR не найден в базе";
+
         var canvas = GetComponentInChildren<Canvas>();
-        if (canvas == null)
-        {
-            Debug.LogError("[WebCard] Canvas не найден на объекте!");
-            return;
-        }
+        if (canvas == null) { Debug.LogError("[WebCard] Canvas не найден"); return; }
         BuildUI(canvas.transform);
     }
 
-    private void OnDestroy()
-    {
-        if (current == this) current = null;
-    }
+    private void OnDestroy() { if (current == this) current = null; }
 
-    // ==========================================
-    // Построение интерфейса
-    // ==========================================
     private void BuildUI(Transform canvasRoot)
     {
         var panel = CreateUIObject("Panel", canvasRoot);
@@ -64,7 +57,7 @@ public class WebCardController : MonoBehaviour
         vlg.childControlWidth = true;
         vlg.childControlHeight = true;
 
-        // Заголовок
+        // Заголовок (название изделия или host)
         var titleGo = CreateUIObject("Title", panel.transform);
         titleText = titleGo.AddComponent<TextMeshProUGUI>();
         SetFont(titleText);
@@ -74,12 +67,12 @@ public class WebCardController : MonoBehaviour
         titleText.alignment = TextAlignmentOptions.Center;
         titleText.color = Color.white;
 
-        // URL
+        // URL (или "без ссылки")
         var urlGo = CreateUIObject("URL", panel.transform);
         urlText = urlGo.AddComponent<TextMeshProUGUI>();
         SetFont(urlText);
-        urlText.text = pageUrl;
-        urlText.fontSize = 32;
+        urlText.text = string.IsNullOrEmpty(pageUrl) ? "(без ссылки)" : pageUrl;
+        urlText.fontSize = 28;
         urlText.alignment = TextAlignmentOptions.Center;
         urlText.color = new Color(0.5f, 0.7f, 1f);
 
@@ -87,17 +80,26 @@ public class WebCardController : MonoBehaviour
         var hintGo = CreateUIObject("Hint", panel.transform);
         var hint = hintGo.AddComponent<TextMeshProUGUI>();
         SetFont(hint);
-        hint.text = "Нажмите кнопку ниже, чтобы открыть страницу";
+        hint.text = string.IsNullOrEmpty(pageUrl)
+            ? "Для этого QR нет ссылки"
+            : "Нажмите кнопку ниже, чтобы открыть страницу";
         hint.fontSize = 28;
         hint.alignment = TextAlignmentOptions.Center;
         hint.color = new Color(0.8f, 0.8f, 0.8f);
 
         // Кнопка "Открыть страницу"
-        var openGo = CreateUIObject("OpenButton", panel.transform);
+        openGo = CreateUIObject("OpenButton", panel.transform);
         openGo.AddComponent<Image>().color = new Color(0.10f, 0.55f, 0.90f);
-        var openBtn = openGo.AddComponent<Button>();
+        openBtn = openGo.AddComponent<Button>();
         CreateTextChild(openGo.transform, "Открыть страницу", 44);
         openBtn.onClick.AddListener(OpenPage);
+
+        // Если URL нет — кнопка неактивна
+        if (string.IsNullOrEmpty(pageUrl))
+        {
+            openBtn.interactable = false;
+            openGo.GetComponent<Image>().color = new Color(0.3f, 0.3f, 0.3f);
+        }
 
         // Кнопка "Закрыть"
         var closeGo = CreateUIObject("CloseButton", panel.transform);
@@ -109,12 +111,10 @@ public class WebCardController : MonoBehaviour
 
     private void OpenPage()
     {
+        if (string.IsNullOrEmpty(pageUrl)) return;
         WebOverlayController.GetOrCreate().Open(pageUrl, pageTitle);
     }
 
-    // ==========================================
-    // Вспомогательные методы
-    // ==========================================
     private GameObject CreateUIObject(string name, Transform parent)
     {
         var go = new GameObject(name);
@@ -146,7 +146,6 @@ public class WebCardController : MonoBehaviour
 
     private void SetFont(TextMeshProUGUI tmp)
     {
-        if (TMP_Settings.defaultFontAsset != null)
-            tmp.font = TMP_Settings.defaultFontAsset;
+        if (TMP_Settings.defaultFontAsset != null) tmp.font = TMP_Settings.defaultFontAsset;
     }
 }
