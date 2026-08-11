@@ -29,7 +29,7 @@ public class WebButtonHook : MonoBehaviour
     {
         var button = GetComponent<Button>();
 
-        objectSpawner = FindObjectOfType<UnityEngine.XR.Interaction.Toolkit.Samples.StarterAssets.ObjectSpawner>();
+        objectSpawner = FindAnyObjectByType<UnityEngine.XR.Interaction.Toolkit.Samples.StarterAssets.ObjectSpawner>();
         if (objectSpawner != null)
         {
             foreach (var comp in objectSpawner.GetComponents<Component>())
@@ -186,7 +186,7 @@ public class WebButtonHook : MonoBehaviour
         CloseDialog();
 
         // Защита от дубликатов
-        if (FindObjectOfType<WebCardController>() != null)
+        if (FindAnyObjectByType<WebCardController>() != null)
         {
             Debug.Log("[WebHook] Карточка уже на сцене — не создаём вторую");
             return;

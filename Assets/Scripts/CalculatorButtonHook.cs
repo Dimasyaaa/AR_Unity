@@ -25,7 +25,7 @@ public class CalculatorButtonHook : MonoBehaviour
     private void OnPressed()
     {
         // Если калькулятор уже на сцене — не создаём второй, а возвращаем его перед камеру
-        var existing = FindObjectOfType<CalculatorController>();
+        var existing = FindAnyObjectByType<CalculatorController>();
         if (existing != null)
         {
             PlaceInFront(existing.transform);

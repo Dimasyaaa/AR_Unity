@@ -15,7 +15,7 @@ public class ImageButtonHook : MonoBehaviour
     {
         var button = GetComponent<Button>();
 
-        objectSpawner = FindObjectOfType<UnityEngine.XR.Interaction.Toolkit.Samples.StarterAssets.ObjectSpawner>();
+        objectSpawner = FindAnyObjectByType<UnityEngine.XR.Interaction.Toolkit.Samples.StarterAssets.ObjectSpawner>();
         if (objectSpawner != null)
             foreach (var c in objectSpawner.GetComponents<Component>())
                 if (c.GetType().Name == "ARInteractorSpawnTrigger")
@@ -30,7 +30,7 @@ public class ImageButtonHook : MonoBehaviour
 
     private void OnPressed()
     {
-        if (FindObjectOfType<ImageCardController>() != null)
+        if (FindAnyObjectByType<ImageCardController>() != null)
         {
             Debug.Log("[ImageHook] Карточка уже на сцене");
             return;

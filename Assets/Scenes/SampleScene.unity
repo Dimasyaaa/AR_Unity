@@ -1241,7 +1241,7 @@ MonoBehaviour:
   m_OnlySpawnInView: 1
   m_ViewportPeriphery: 0
   m_ApplyRandomAngleAtSpawn: 1
-  m_SpawnAngleRange: 45
+  m_SpawnAngleRange: 280
   m_SpawnAsChildren: 1
 --- !u!4 &436358034
 Transform:
