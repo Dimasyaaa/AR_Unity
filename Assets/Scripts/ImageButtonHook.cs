@@ -43,4 +43,6 @@ public class ImageButtonHook : MonoBehaviour
 
         Debug.Log("[ImageHook] Тапни по поверхности, чтобы поставить карточку");
     }
+
+    public void SpawnCard() => OnPressed();
 }

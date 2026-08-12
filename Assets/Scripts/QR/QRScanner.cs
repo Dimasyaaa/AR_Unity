@@ -4,26 +4,20 @@ using UnityEngine;
 using UnityEngine.Android;
 #endif
 
-// Управляет процессом сканирования QR-кодов. Реализован как синглтон для глобального доступа.
+// Управляет процессом сканирования QR-кодов. Синглтон с глобальным доступом.
 public class QRScanner : MonoBehaviour
 {
     public static QRScanner Instance { get; private set; }
 
-    // Событие, вызываемое при успешном сканировании QR-кода
+    // Событие успешного сканирования
     public event Action<string> OnQRScanned;
 
     private bool isScanning = false;
 
     void Awake()
     {
-        // Реализация паттерна Singleton. Если экземпляр уже есть, удаляем дубликат.
-        if (Instance != null && Instance != this)
-        {
-            Destroy(gameObject);
-            return;
-        }
+        if (Instance != null && Instance != this) { Destroy(gameObject); return; }
         Instance = this;
-        // Сохраняем объект при переходе между сценами
         DontDestroyOnLoad(gameObject);
     }
 
@@ -33,23 +27,19 @@ public class QRScanner : MonoBehaviour
         isScanning = true;
 
 #if UNITY_ANDROID && !UNITY_EDITOR
-        // На Android проверяем наличие прав на использование камеры
         if (Permission.HasUserAuthorizedPermission(Permission.Camera))
         {
             LaunchNativeScanner();
         }
         else
         {
-            // Если прав нет, запрашиваем их с обработчиками результатов
             PermissionCallbacks callbacks = new PermissionCallbacks();
             callbacks.PermissionGranted += OnPermissionGranted;
             callbacks.PermissionDenied += OnPermissionDenied;
             callbacks.PermissionDeniedAndDontAskAgain += OnPermissionDenied;
-            
             Permission.RequestUserPermissions(new[] { Permission.Camera }, callbacks);
         }
 #else
-        // В редакторе Unity имитируем сканирование через 2 секунды
         Debug.Log("[QR] Editor mode - simulating scan");
         Invoke(nameof(TestScan), 2);
 #endif
@@ -68,7 +58,6 @@ public class QRScanner : MonoBehaviour
         isScanning = false;
     }
 
-    // Запуск нативной Android-активности для сканирования через Java-интероп
     private void LaunchNativeScanner()
     {
         try
@@ -91,7 +80,7 @@ public class QRScanner : MonoBehaviour
     }
 #endif
 
-    // Этот метод вызывается из нативного Android-кода после сканирования
+    // Вызывается из нативного Android-кода после сканирования
     public void OnNativeQRScanned(string result)
     {
         Debug.Log($"[QR] Scanned result: {result}");
@@ -103,15 +92,18 @@ public class QRScanner : MonoBehaviour
         }
         else
         {
-            GameDataManager.LastScannedQR = result; 
+            GameDataManager.LastScannedQR = result; // сохраняем глобально
             OnQRScanned?.Invoke(result);
         }
     }
 
-    // Имитация успешного сканирования для тестирования в редакторе Unity
+    // Эмуляция скана в редакторе: сразу ваш реальный URL
     private void TestScan()
     {
+        Debug.Log("[QR] TestScan fired");
         isScanning = false;
-        GameDataManager.LastScannedQR = "TEST_QR_001";
+        string testUrl = "https://app.kolagmk.ru/dsq/93C1671C08844953074249C1F0CB239F";
+        GameDataManager.LastScannedQR = testUrl;
+        OnQRScanned?.Invoke(testUrl);
     }
 }

@@ -11,6 +11,7 @@ public class CalculatorController : MonoBehaviour
 {
     private TextMeshProUGUI displayText;
     private string expression = "";
+    public bool IsPinned { get; set; }
 
     private void Start()
     {

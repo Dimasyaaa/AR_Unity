@@ -60,4 +60,5 @@ public class CalculatorButtonHook : MonoBehaviour
         t.position = pos;
         t.rotation = Quaternion.LookRotation(cam.transform.position - pos);
     }
+    public void SpawnCalculator() => OnPressed();
 }

@@ -112,4 +112,8 @@ public class MainMenuManager : MonoBehaviour
         Application.Quit();
 #endif
     }
+
+    public void StartScan() => OnScanClicked();
+    public void ShowInstructions() => OnInstructionsClicked();
+    public void ExitApp() => OnExitClicked();
 }

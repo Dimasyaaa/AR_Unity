@@ -235,4 +235,6 @@ public class WebButtonHook : MonoBehaviour
             return qrCode;
         return "https://www.google.com";
     }
+
+    public void OpenWeb() => ShowChoiceDialog();
 }
