@@ -2,7 +2,7 @@ using UnityEngine;
 using System.Collections.Generic;
 
 // Голосовой ввод через Android SpeechRecognizer.
-// ВАЖНО: колбэки приходят с Java-потока, поэтому весь Unity-код
+// колбэки приходят с Java-потока, поэтому весь Unity-код
 // выполняется ТОЛЬКО на главном потоке через очередь в Update().
 public class VoiceController : MonoBehaviour
 {

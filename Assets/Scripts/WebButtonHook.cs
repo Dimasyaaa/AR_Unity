@@ -6,14 +6,12 @@ using UnityEngine.Events;
 using UnityEngine.UI;
 
 // Вешается на кнопку "Button (Web)".
-// Показывает диалог выбора "Оверлей / AR-объект".
+// Показывает диалог выбора Оверлей / AR-объект.
 // - Оверлей: сразу открывает WebView с меню управления, без объекта.
 // - AR-объект: ставит индекс карточки и включает тап-спавн 
 [RequireComponent(typeof(Button))]
 public class WebButtonHook : MonoBehaviour
 {
-    [SerializeField] private float spawnDistance = 1.0f;
-
     // Индекс WebCardVariant в списке ObjectSpawner 
     [SerializeField] private int webCardIndex = 0;
 

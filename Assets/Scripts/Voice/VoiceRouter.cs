@@ -4,7 +4,7 @@ using UnityEngine;
 using UnityEngine.SceneManagement;
 using UnityEngine.UI;
 
-// Голосовые команды + красивая экранная подсказка (слышу / действие / ошибка).
+// Голосовые команды (RU + EN) + красивая экранная подсказка.
 public class VoiceRouter : MonoBehaviour
 {
     private Canvas hintCanvas;
@@ -12,6 +12,7 @@ public class VoiceRouter : MonoBehaviour
     private string lastHeard = "";
     private string lastAction = "";
     private TMP_Dropdown lastDropdown;
+
 
     void Awake()
     {
@@ -23,7 +24,6 @@ public class VoiceRouter : MonoBehaviour
     {
         if (VoiceController.Instance) VoiceController.Instance.OnHeard += Handle;
         SceneManager.sceneLoaded += OnSceneLoaded;
-        CreateHint();
     }
 
     void OnDisable()
@@ -45,107 +45,173 @@ public class VoiceRouter : MonoBehaviour
         string scene = SceneManager.GetActiveScene().name;
         Debug.Log($"[VoiceRouter] '{t}' в {scene}");
 
+        // Помощь голосом: открыть/закрыть панель
+        if (Has(t, "помощ", "help", "справк", "команд"))
+        {
+            if (VoiceHelpController.Instance != null) VoiceHelpController.Instance.Toggle();
+            return;
+        }
+
+        // Если панель помощи открыта — «закрыть» закрывает именно её
+        if (VoiceHelpController.IsOpen && Has(t, "закры", "close", "zakry"))
+        {
+            VoiceHelpController.CloseIfOpen();
+            return;
+        }
+
         try
         {
             if (scene == "StartScene") HandleStart(t);
             else if (scene == "LoginScene") HandleLogin(t);
             else HandleSample(t);
         }
-        catch (System.Exception e)
+        catch (Exception e)
         {
             lastAction = "ОШИБКА: " + e.Message;
             Debug.LogError($"[VoiceRouter] Ошибка при команде '{t}': {e}");
         }
     }
 
+    private static bool Has(string t, params string[] keys)
+    {
+        foreach (var k in keys)
+            if (t.Contains(k)) return true;
+        return false;
+    }
+
     // ================= START SCENE =================
     private void HandleStart(string t)
     {
-        if (t.Contains("скан")) TryPress("ScanButton");
-        else if (t.Contains("инструк")) TryPress("InstructionsButton");
-        else if (t.Contains("синхрон")) TryPress("SyncButton");
-        else if (t.Contains("вай") || t.Contains("вифи") || t.Contains("wifi") || t.Contains("интернет")) TryPress("WifiButton");
-        else if (t.Contains("usb") || t.Contains("юсб") || t.Contains("усб") || t.Contains("флеш")) TryPress("UsbButton");
-        else if (t.Contains("закры")) TryPress("CloseButton");
-        else if (t.Contains("выход")) TryPress("ExitButton");
+        if (Has(t, "скан", "scan", "skan", "qr")) TryPress("ScanButton");
+        else if (Has(t, "инструк", "instruction", "instruk", "help")) TryPress("InstructionsButton");
+        else if (Has(t, "синхрон", "sync", "sinhron")) TryPress("SyncButton");
+        else if (Has(t, "вай", "вифи", "wifi", "wi-fi", "интернет", "internet")) TryPress("WifiButton");
+        else if (Has(t, "usb", "юсб", "усб", "флеш", "flash")) TryPress("UsbButton");
+        else if (Has(t, "закры", "close", "zakry", "hide")) TryPress("CloseButton");
+        else if (Has(t, "выход", "exit", "vyhod", "quit")) TryPress("ExitButton");
     }
 
     // ================= LOGIN SCENE =================
     private void HandleLogin(string t)
     {
-        if (t.Contains("фио") || t.Contains("имя") || t.Contains("пользоват"))
-        {
-            FocusInput("FullNameInput");
-            return;
-        }
+        if (Has(t, "фио", "имя", "пользоват", "fam", "name", "fio", "surname"))
+        { FocusInput("FullNameInput"); return; }
 
-        if (t.Contains("пароль"))
-        {
-            FocusInput("PasswordInput");
-            return;
-        }
+        if (Has(t, "парол", "parole", "password", "parol"))
+        { FocusInput("PasswordInput"); return; }
 
-        if (t.Contains("отдел"))
+        if (Has(t, "отдел", "department", "otdel", "section"))
         {
             var dd = FindDropdown("DepartmentDropdown");
-            if (dd != null)
-            {
-                lastDropdown = dd;
-                dd.Show();
-                lastAction = "→ открыт список отделов";
-            }
+            if (dd != null) { lastDropdown = dd; dd.Show(); lastAction = "→ открыт список отделов"; }
             else lastAction = "→ НЕ найден дропдаун отделов";
             return;
         }
 
-        if (t.Contains("вверх") || t.Contains("вниз"))
-        {
-            if (lastDropdown == null) lastDropdown = FindDropdown("DepartmentDropdown");
-            if (lastDropdown != null)
-            {
-                int delta = t.Contains("вниз") ? 1 : -1;
-                lastDropdown.value = Mathf.Clamp(lastDropdown.value + delta, 0, lastDropdown.options.Count - 1);
-                lastAction = "→ отдел: " + lastDropdown.captionText.text;
-            }
-            else lastAction = "→ нет активного списка";
-            return;
-        }
+        if (Has(t, "вниз", "down", "vniz")) { MoveDropdown(1); return; }
+        if (Has(t, "вверх", "up", "vverh")) { MoveDropdown(-1); return; }
 
-        if (t.Contains("выбра") || t.Contains("подтвер") || t == "ок")
+        if (Has(t, "выбра", "подтвер", "select", "choose", "apply") || t == "ок")
         {
             if (lastDropdown != null) { lastDropdown.Hide(); lastAction = "→ список закрыт"; }
             return;
         }
 
-        if (t.Contains("войти") || t.Contains("вход"))
+        if (Has(t, "войти", "вход", "login", "enter", "wait", "voyt"))
         {
             if (!TryPress("LoginButton")) TryPress("войти");
             return;
         }
     }
 
+    private void MoveDropdown(int delta)
+    {
+        if (lastDropdown == null) lastDropdown = FindDropdown("DepartmentDropdown");
+        if (lastDropdown != null)
+        {
+            lastDropdown.value = Mathf.Clamp(lastDropdown.value + delta, 0, lastDropdown.options.Count - 1);
+            lastAction = "→ отдел: " + lastDropdown.captionText.text;
+        }
+        else lastAction = "→ нет активного списка";
+    }
+
     // ================= SAMPLE SCENE =================
     private void HandleSample(string t)
     {
-        if (t.Contains("калькулятор"))
-            FindAnyObjectByType<CalculatorButtonHook>()?.SpawnCalculator();
-        else if (t.Contains("веб") || t.Contains("сайт"))
-            FindAnyObjectByType<WebButtonHook>()?.OpenWeb();
-        else if (t.Contains("карточ") || t.Contains("изображ") || t.Contains("фото"))
-            FindAnyObjectByType<ImageButtonHook>()?.SpawnCard();
-        else if (t.Contains("положи") || t.Contains("закреп"))
-            PinAll(true);
-        else if (t.Contains("отпусти") || t.Contains("сними"))
-            PinAll(false);
-        else if (t.Contains("закры"))
-            CloseAll();
-        else if (t.Contains("назад"))
-            SceneManager.LoadScene("StartScene");
+        // Служебные кнопки сцены
+        if (Has(t, "далее", "продолж", "continue", "start", "начать"))
+        { TryPress("Continue Button"); return; }
+
+        if (Has(t, "меню", "создать", "menu", "create"))
+        { TryPress("Create Button"); return; }
+
+        if (Has(t, "отмена", "отменить", "cancel"))
+        { TryPress("Cancel Button"); return; }
+
+        if (Has(t, "удали", "remove", "delete"))
+        { TryPress("Delete Button"); return; }
+
+        if (Has(t, "настрой", "options", "доп"))
+        { TryPress("Options Button"); return; }
+
+        // Элементы Options Modal
+        if (Has(t, "подсказ", "инструкция", "hint"))
+        { TryPress("Hints Button"); return; }
+
+        if (Has(t, "удал", "все", "hint"))
+        { TryPress("Remove Objects Button"); return; }
+
+        if (Has(t, "плоскост", "plane", "точки", "grid"))
+        { TryPress("Debug Plane Toggle"); return; }
+
+        if (Has(t, "дебаг", "debug", "отладк"))
+        { TryPress("Debug Menu Toggle"); return; }
+
+        // Диалог выбора веб-режима (появляется после «веб»)
+        if (Has(t, "оверлей", "overlay", "экран", "screen"))
+        { TryPress("оверлей"); return; }
+
+        if (Has(t, "объект", "object", "obyekt", "ар"))
+        { TryPress("объект"); return; }
+
+        // Основные объекты (хуки ищутся ВКЛЮЧАЯ неактивные — Object Menu скрыт)
+        if (Has(t, "калькулятор", "calculator", "kalk", "calc"))
+        {
+            var h = FindHook<CalculatorButtonHook>();
+            if (h != null) { h.SpawnCalculator(); lastAction = "→ калькулятор"; }
+            else TryPress("Button (Calculator)");
+            return;
+        }
+
+        if (Has(t, "веб", "сайт", "web", "site", "veb", "sait"))
+        {
+            var h = FindHook<WebButtonHook>();
+            if (h != null) { h.OpenWeb(); lastAction = "→ веб"; }
+            else TryPress("Button (Web)");
+            return;
+        }
+
+        if (Has(t, "карточ", "изображ", "фото", "card", "kart", "photo", "image"))
+        {
+            var h = FindHook<ImageButtonHook>();
+            if (h != null) { h.SpawnCard(); lastAction = "→ карточка"; }
+            else TryPress("Button (WebImg)");
+            return;
+        }
+
+        if (Has(t, "положи", "закреп", "pin", "polozh", "fix")) { PinAll(true); return; }
+        if (Has(t, "отпусти", "сними", "unpin", "release", "otpust")) { PinAll(false); return; }
+        if (Has(t, "закры", "close", "zakry")) { CloseAll(); return; }
+        if (Has(t, "назад", "back", "nazad")) { SceneManager.LoadScene("StartScene"); return; }
     }
 
-    // ==========================================
-    // Поиск и нажатие кнопок (с диагностикой)
-    // ==========================================
+    // Поиск (включая неактивные) и нажатие
+    private T FindHook<T>() where T : Component
+    {
+        var all = UnityEngine.Object.FindObjectsByType<T>(FindObjectsInactive.Include);
+        return all.Length > 0 ? all[0] : null;
+    }
+
     private bool TryPress(string goName)
     {
         var all = UnityEngine.Object.FindObjectsByType<Button>(FindObjectsInactive.Include);
@@ -218,51 +284,5 @@ public class VoiceRouter : MonoBehaviour
         var web = FindAnyObjectByType<WebCardController>(); if (web) Destroy(web.gameObject);
         var img = FindAnyObjectByType<ImageCardController>(); if (img) Destroy(img.gameObject);
         lastAction = "→ закрыто";
-    }
-
-    // ==========================================
-    // Красивая подсказка: панель + цветной текст
-    // ==========================================
-    private void CreateHint()
-    {
-        if (hintCanvas != null) return;
-
-        var go = new GameObject("VoiceHint");
-        go.transform.SetParent(transform);
-        hintCanvas = go.AddComponent<Canvas>();
-        hintCanvas.renderMode = RenderMode.ScreenSpaceOverlay;
-        hintCanvas.sortingOrder = 9500;
-        var scaler = go.AddComponent<CanvasScaler>();
-        scaler.uiScaleMode = CanvasScaler.ScaleMode.ScaleWithScreenSize;
-        scaler.referenceResolution = new Vector2(1920, 1080);
-
-        // Полупрозрачная панель снизу
-        var panel = new GameObject("Panel");
-        panel.transform.SetParent(go.transform, false);
-        var img = panel.AddComponent<Image>();
-        img.color = new Color(0.04f, 0.07f, 0.12f, 0.72f);
-        img.raycastTarget = false;
-        var prt = panel.GetComponent<RectTransform>();
-        prt.anchorMin = new Vector2(0, 0);
-        prt.anchorMax = new Vector2(1, 0);
-        prt.pivot = new Vector2(0.5f, 0);
-        prt.anchoredPosition = Vector2.zero;
-        prt.sizeDelta = new Vector2(0, 175);
-
-        var textGo = new GameObject("HintText");
-        textGo.transform.SetParent(panel.transform, false);
-        hintText = textGo.AddComponent<TextMeshProUGUI>();
-        if (TMP_Settings.defaultFontAsset != null) hintText.font = TMP_Settings.defaultFontAsset;
-        hintText.fontSize = 26;
-        hintText.alignment = TextAlignmentOptions.Left;
-        hintText.color = Color.white;
-        hintText.raycastTarget = false;
-        hintText.margin = new Vector4(30, 8, 30, 8);
-        var rt = textGo.GetComponent<RectTransform>();
-        rt.anchorMin = Vector2.zero;
-        rt.anchorMax = Vector2.one;
-        rt.offsetMin = Vector2.zero;
-        rt.offsetMax = Vector2.zero;
-
     }
 }

@@ -12,9 +12,18 @@ public class CalculatorController : MonoBehaviour
     private TextMeshProUGUI displayText;
     private string expression = "";
     public bool IsPinned { get; set; }
+    private static CalculatorController current;
 
     private void Start()
     {
+        // только один калькулятор на сцене
+        if (current != null && current != this)
+        {
+            Destroy(gameObject);
+            return;
+        }
+        current = this;
+
         var canvas = GetComponentInChildren<Canvas>();
         if (canvas == null)
         {
@@ -212,6 +221,11 @@ public class CalculatorController : MonoBehaviour
         tmp.color = Color.white;
         Stretch(textGo.GetComponent<RectTransform>());
         return tmp;
+    }
+
+    private void OnDestroy()
+    {
+        if (current == this) current = null;
     }
 
     private void SetFont(TextMeshProUGUI tmp)
