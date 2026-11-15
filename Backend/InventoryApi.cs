@@ -1,0 +1,794 @@
+using System.Data;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Routing;
+using Npgsql;
+using NpgsqlTypes;
+
+public static class InventoryApi
+{
+    public static IEndpointRouteBuilder MapInventoryApi(
+        this IEndpointRouteBuilder endpoints,
+        string connectionString)
+    {
+        endpoints.MapGet("/api/inventory/cabinets", (string? qrCode) =>
+        {
+            if (string.IsNullOrWhiteSpace(qrCode))
+                return Results.BadRequest(new { success = false, message = "Укажите qrCode" });
+
+            using var connection = new NpgsqlConnection(connectionString);
+            connection.Open();
+
+            var qrValues = ExpandQr(qrCode).ToArray();
+            long cabinetId;
+            long qrCodeId;
+            string title;
+            string normalizedCode;
+            bool hasPhoto;
+            string contentType;
+
+            using (var command = new NpgsqlCommand(@"
+                SELECT c.id, q.id, c.title, q.code,
+                       c.reference_photo IS NOT NULL, c.reference_photo_content_type
+                FROM cabinet_profiles c
+                JOIN qr_codes q ON q.id = c.qr_code_id
+                WHERE q.code = ANY(@codes)
+                  AND q.is_active = TRUE
+                  AND c.is_active = TRUE
+                LIMIT 1
+            ", connection))
+            {
+                command.Parameters.AddWithValue("codes", qrValues);
+                using var reader = command.ExecuteReader();
+                if (!reader.Read())
+                    return Results.NotFound(new { success = false, message = "Шкаф для этого QR-кода не найден" });
+
+                cabinetId = reader.GetInt64(0);
+                qrCodeId = reader.GetInt64(1);
+                title = reader.GetString(2);
+                normalizedCode = reader.GetString(3);
+                hasPhoto = reader.GetBoolean(4);
+                contentType = reader.GetString(5);
+            }
+
+            var items = new List<object>();
+            using (var command = new NpgsqlCommand(@"
+                SELECT id, item_name, COALESCE(description, ''), sort_order
+                FROM cabinet_checklist_items
+                WHERE cabinet_id = @cabinetId AND is_active = TRUE
+                ORDER BY sort_order, id
+            ", connection))
+            {
+                command.Parameters.AddWithValue("cabinetId", cabinetId);
+                using var reader = command.ExecuteReader();
+                while (reader.Read())
+                {
+                    items.Add(new
+                    {
+                        id = reader.GetInt64(0),
+                        name = reader.GetString(1),
+                        description = reader.GetString(2),
+                        sortOrder = reader.GetInt32(3)
+                    });
+                }
+            }
+
+            var photos = new List<object>();
+            using (var command = new NpgsqlCommand(@"
+                SELECT page_number, caption, content_type
+                FROM cabinet_photos
+                WHERE cabinet_id = @cabinetId
+                ORDER BY page_number
+            ", connection))
+            {
+                command.Parameters.AddWithValue("cabinetId", cabinetId);
+                using var reader = command.ExecuteReader();
+                while (reader.Read())
+                    photos.Add(new
+                    {
+                        pageNumber = reader.GetInt16(0),
+                        caption = reader.GetString(1),
+                        contentType = reader.GetString(2),
+                        photoUrl = $"/api/inventory/cabinet-photo?qrCode={Uri.EscapeDataString(normalizedCode)}&pageNumber={reader.GetInt16(0)}"
+                    });
+            }
+            if (photos.Count == 0 && hasPhoto)
+                photos.Add(new
+                {
+                    pageNumber = 1,
+                    caption = "Лист 1",
+                    contentType,
+                    photoUrl = $"/api/inventory/cabinet-photo?qrCode={Uri.EscapeDataString(normalizedCode)}&pageNumber=1"
+                });
+            hasPhoto = photos.Count > 0;
+
+            return Results.Ok(new
+            {
+                success = true,
+                cabinetId,
+                qrCodeId,
+                qrCode = normalizedCode,
+                title,
+                photoAvailable = hasPhoto,
+                photoContentType = contentType,
+                photoUrl = hasPhoto ? "/api/inventory/cabinet-photo?qrCode=" + Uri.EscapeDataString(normalizedCode) + "&pageNumber=1" : null,
+                photos,
+                items
+            });
+        })
+        .WithTags("Inventory")
+        .WithSummary("Получить шкаф и перечень по QR-коду")
+        .WithDescription("Возвращает карточку шкафа и активный список предметов. Фотография хранится в PostgreSQL BYTEA и доступна отдельным запросом.")
+        .Produces(200)
+        .Produces(400)
+        .Produces(404);
+
+        endpoints.MapGet("/api/inventory/cabinet-photo", (string? qrCode, int? pageNumber) =>
+        {
+            if (string.IsNullOrWhiteSpace(qrCode))
+                return Results.BadRequest(new { success = false, message = "Укажите qrCode" });
+
+            using var connection = new NpgsqlConnection(connectionString);
+            connection.Open();
+            int page = Math.Clamp(pageNumber ?? 1, 1, 2);
+            using var command = new NpgsqlCommand(@"
+                SELECT COALESCE(p.image_data, CASE WHEN @page = 1 THEN c.reference_photo END),
+                       COALESCE(p.content_type, c.reference_photo_content_type)
+                FROM cabinet_profiles c
+                JOIN qr_codes q ON q.id = c.qr_code_id
+                LEFT JOIN cabinet_photos p ON p.cabinet_id = c.id AND p.page_number = @page
+                WHERE q.code = ANY(@codes)
+                  AND q.is_active = TRUE AND c.is_active = TRUE
+                  AND (p.image_data IS NOT NULL OR (@page = 1 AND c.reference_photo IS NOT NULL))
+                LIMIT 1
+            ", connection);
+            command.Parameters.AddWithValue("codes", ExpandQr(qrCode).ToArray());
+            command.Parameters.AddWithValue("page", page);
+
+            using var reader = command.ExecuteReader(CommandBehavior.SequentialAccess);
+            if (!reader.Read())
+                return Results.NotFound(new { success = false, message = "Фотография шкафа не найдена" });
+
+            var bytes = (byte[])reader[0];
+            var contentType = reader.GetString(1);
+            return Results.Bytes(bytes, contentType, enableRangeProcessing: false);
+        })
+        .WithTags("Inventory")
+        .WithSummary("Получить фотографию шкафа")
+        .Produces(200)
+        .Produces(400)
+        .Produces(404);
+
+        endpoints.MapPost("/api/sync/inventory-runs", (InventoryRunSyncPayload payload) =>
+        {
+            if (payload?.items == null)
+                return Results.BadRequest(new { success = false, message = "Список проверок отсутствует" });
+
+            using var connection = new NpgsqlConnection(connectionString);
+            connection.Open();
+            int imported = 0;
+            int duplicates = 0;
+            int skipped = 0;
+            var errors = new List<string>();
+
+            foreach (var run in payload.items)
+            {
+                try
+                {
+                    var result = SaveRun(connection, run);
+                    if (result == SaveRunResult.Imported) imported++;
+                    else if (result == SaveRunResult.Duplicate) duplicates++;
+                    else skipped++;
+                }
+                catch (ArgumentException exception)
+                {
+                    skipped++;
+                    errors.Add(exception.Message);
+                }
+            }
+
+            return Results.Ok(new { imported, duplicates, skipped, errors });
+        })
+        .WithTags("Inventory")
+        .WithSummary("Синхронизировать завершённые инвентаризации")
+        .WithDescription("Принимает сохранённые офлайн-проверки. clientRunId обеспечивает безопасный повтор запроса без дубликатов.")
+        .Produces(200)
+        .Produces(400);
+
+        endpoints.MapGet("/api/admin/inventory/cabinets", () =>
+        {
+            var cabinets = new List<object>();
+            using var connection = new NpgsqlConnection(connectionString);
+            connection.Open();
+            using var command = new NpgsqlCommand(@"
+                SELECT q.id, q.code, q.object_name, c.id, c.title,
+                       (COALESCE(c.reference_photo IS NOT NULL, FALSE) OR EXISTS (
+                           SELECT 1 FROM cabinet_photos p WHERE p.cabinet_id = c.id
+                       )),
+                       (SELECT COUNT(*) FROM cabinet_checklist_items i
+                        WHERE i.cabinet_id = c.id AND i.is_active = TRUE)
+                FROM qr_codes q
+                LEFT JOIN cabinet_profiles c ON c.qr_code_id = q.id
+                ORDER BY q.object_name, q.id
+            ", connection);
+            using var reader = command.ExecuteReader();
+            while (reader.Read())
+                cabinets.Add(new
+                {
+                    qrCodeId = reader.GetInt64(0),
+                    qrCode = reader.GetString(1),
+                    objectName = reader.GetString(2),
+                    cabinetId = reader.IsDBNull(3) ? (long?)null : reader.GetInt64(3),
+                    title = reader.IsDBNull(4) ? reader.GetString(2) : reader.GetString(4),
+                    photoAvailable = reader.GetBoolean(5),
+                    itemCount = reader.GetInt64(6)
+                });
+            return Results.Ok(cabinets);
+        })
+        .WithTags("Admin: Inventory")
+        .WithSummary("Список QR-кодов и настроенных шкафов")
+        .Produces(200);
+
+        endpoints.MapGet("/api/admin/inventory/cabinets/{qrCodeId:long}", (long qrCodeId) =>
+        {
+            using var connection = new NpgsqlConnection(connectionString);
+            connection.Open();
+            long cabinetId;
+            string code;
+            string objectName;
+            string title;
+            bool photoAvailable;
+            using (var command = new NpgsqlCommand(@"
+                SELECT q.code, q.object_name, c.id, c.title,
+                       (c.reference_photo IS NOT NULL OR EXISTS (SELECT 1 FROM cabinet_photos p WHERE p.cabinet_id = c.id))
+                FROM qr_codes q LEFT JOIN cabinet_profiles c ON c.qr_code_id = q.id
+                WHERE q.id = @qrCodeId
+            ", connection))
+            {
+                command.Parameters.AddWithValue("qrCodeId", qrCodeId);
+                using var reader = command.ExecuteReader();
+                if (!reader.Read()) return Results.NotFound(new { message = "QR-код не найден" });
+                code = reader.GetString(0);
+                objectName = reader.GetString(1);
+                cabinetId = reader.IsDBNull(2) ? 0 : reader.GetInt64(2);
+                title = reader.IsDBNull(3) ? objectName : reader.GetString(3);
+                photoAvailable = !reader.IsDBNull(4) && reader.GetBoolean(4);
+            }
+            var items = new List<object>();
+            if (cabinetId > 0)
+            {
+                using var command = new NpgsqlCommand(@"
+                    SELECT id, item_name, COALESCE(description, ''), sort_order
+                    FROM cabinet_checklist_items WHERE cabinet_id = @cabinetId AND is_active = TRUE
+                    ORDER BY sort_order, id
+                ", connection);
+                command.Parameters.AddWithValue("cabinetId", cabinetId);
+                using var reader = command.ExecuteReader();
+                while (reader.Read()) items.Add(new
+                {
+                    id = reader.GetInt64(0), name = reader.GetString(1),
+                    description = reader.GetString(2), sortOrder = reader.GetInt32(3)
+                });
+            }
+            var photos = new List<object>();
+            if (cabinetId > 0)
+            {
+                using var photoCommand = new NpgsqlCommand(@"
+                    SELECT page_number, caption, content_type
+                    FROM cabinet_photos WHERE cabinet_id = @cabinetId ORDER BY page_number
+                ", connection);
+                photoCommand.Parameters.AddWithValue("cabinetId", cabinetId);
+                using var photoReader = photoCommand.ExecuteReader();
+                while (photoReader.Read()) photos.Add(new
+                {
+                    pageNumber = photoReader.GetInt16(0),
+                    caption = photoReader.GetString(1),
+                    contentType = photoReader.GetString(2),
+                    photoUrl = $"/api/inventory/cabinet-photo?qrCode={Uri.EscapeDataString(code)}&pageNumber={photoReader.GetInt16(0)}"
+                });
+            }
+            if (photos.Count == 0 && photoAvailable)
+                photos.Add(new { pageNumber = 1, caption = "Лист 1", contentType = "image/jpeg", photoUrl = $"/api/inventory/cabinet-photo?qrCode={Uri.EscapeDataString(code)}&pageNumber=1" });
+            return Results.Ok(new { qrCodeId, qrCode = code, objectName, cabinetId, title, photoAvailable, photos, items });
+        })
+        .WithTags("Admin: Inventory")
+        .WithSummary("Получить настройки шкафа и его чек-лист")
+        .Produces(200)
+        .Produces(404);
+
+        endpoints.MapPut("/api/admin/inventory/cabinets/{qrCodeId:long}", (long qrCodeId, AdminCabinetDto dto) =>
+        {
+            if (string.IsNullOrWhiteSpace(dto.title) || dto.items == null)
+                return Results.BadRequest(new { message = "Название шкафа и список предметов обязательны" });
+            var cleanedItems = dto.items
+                .Select((item, index) => new AdminChecklistItemDto
+                {
+                    id = item.id,
+                    name = item.name?.Trim() ?? string.Empty,
+                    description = item.description?.Trim() ?? string.Empty,
+                    sortOrder = item.sortOrder == 0 ? (index + 1) * 10 : item.sortOrder
+                }).ToList();
+            if (cleanedItems.Any(item => string.IsNullOrWhiteSpace(item.name)))
+                return Results.BadRequest(new { message = "У каждого пункта должно быть название" });
+            if (cleanedItems.GroupBy(item => item.name, StringComparer.OrdinalIgnoreCase).Any(group => group.Count() > 1))
+                return Results.BadRequest(new { message = "Названия предметов в одном шкафу не должны повторяться" });
+
+            var photoUploads = new List<(int page, byte[] bytes, string type, string caption)>();
+            var requestedPhotos = dto.photos ?? new List<AdminCabinetPhotoDto>();
+            if (requestedPhotos.GroupBy(photo => photo.pageNumber).Any(group => group.Count() > 1) ||
+                requestedPhotos.Any(photo => photo.pageNumber is < 1 or > 2))
+                return Results.BadRequest(new { message = "Можно загрузить не более двух фотографий: лист 1 и лист 2" });
+            foreach (var requestedPhoto in requestedPhotos)
+            {
+                if (string.IsNullOrWhiteSpace(requestedPhoto.imageBase64)) continue;
+                byte[] bytes;
+                try { bytes = Convert.FromBase64String(requestedPhoto.imageBase64); }
+                catch (FormatException) { return Results.BadRequest(new { message = "Файл фотографии повреждён" }); }
+                if (bytes.Length == 0 || bytes.Length > 8 * 1024 * 1024)
+                    return Results.BadRequest(new { message = "Каждая фотография должна быть не больше 8 МБ" });
+                if (requestedPhoto.contentType is not ("image/jpeg" or "image/png" or "image/webp"))
+                    return Results.BadRequest(new { message = "Поддерживаются JPEG, PNG и WebP" });
+                photoUploads.Add((requestedPhoto.pageNumber, bytes, requestedPhoto.contentType!,
+                    string.IsNullOrWhiteSpace(requestedPhoto.caption) ? $"Лист {requestedPhoto.pageNumber}" : requestedPhoto.caption.Trim()));
+            }
+            if (photoUploads.Count == 0 && !string.IsNullOrWhiteSpace(dto.photoBase64))
+            {
+                try
+                {
+                    var bytes = Convert.FromBase64String(dto.photoBase64);
+                    if (bytes.Length == 0 || bytes.Length > 8 * 1024 * 1024)
+                        return Results.BadRequest(new { message = "Фотография должна быть не больше 8 МБ" });
+                    if (dto.photoContentType is not ("image/jpeg" or "image/png" or "image/webp"))
+                        return Results.BadRequest(new { message = "Поддерживаются JPEG, PNG и WebP" });
+                    photoUploads.Add((1, bytes, dto.photoContentType!, "Лист 1"));
+                }
+                catch (FormatException) { return Results.BadRequest(new { message = "Файл фотографии повреждён" }); }
+            }
+
+            using var connection = new NpgsqlConnection(connectionString);
+            connection.Open();
+            using var transaction = connection.BeginTransaction();
+            long cabinetId;
+            using (var upsert = new NpgsqlCommand(@"
+                INSERT INTO cabinet_profiles
+                    (qr_code_id, title, reference_photo, reference_photo_content_type, is_active)
+                SELECT q.id, @title, @photo, @contentType, TRUE
+                FROM qr_codes q WHERE q.id = @qrCodeId
+                ON CONFLICT (qr_code_id) DO UPDATE SET
+                    title = EXCLUDED.title,
+                    reference_photo = COALESCE(EXCLUDED.reference_photo, cabinet_profiles.reference_photo),
+                    reference_photo_content_type = CASE WHEN EXCLUDED.reference_photo IS NULL
+                        THEN cabinet_profiles.reference_photo_content_type
+                        ELSE EXCLUDED.reference_photo_content_type END,
+                    is_active = TRUE,
+                    updated_at = NOW()
+                RETURNING id
+            ", connection, transaction))
+            {
+                upsert.Parameters.AddWithValue("qrCodeId", qrCodeId);
+                upsert.Parameters.AddWithValue("title", dto.title.Trim());
+                var firstPage = photoUploads.FirstOrDefault(photo => photo.page == 1);
+                upsert.Parameters.Add("photo", NpgsqlDbType.Bytea).Value = firstPage.bytes is null ? DBNull.Value : firstPage.bytes;
+                upsert.Parameters.AddWithValue("contentType", firstPage.type ?? dto.photoContentType ?? "image/jpeg");
+                var result = upsert.ExecuteScalar();
+                if (result is null)
+                { transaction.Rollback(); return Results.NotFound(new { message = "QR-код не найден" }); }
+                cabinetId = Convert.ToInt64(result);
+            }
+
+            var removalPages = (dto.removePhotoPages ?? new List<int>()).Distinct().ToArray();
+            if (removalPages.Any(page => page is < 1 or > 2))
+                return Results.BadRequest(new { message = "Укажите номер фотографии: 1 или 2" });
+            foreach (var page in removalPages)
+            {
+                using var removePhoto = new NpgsqlCommand(
+                    "DELETE FROM cabinet_photos WHERE cabinet_id = @cabinetId AND page_number = @page",
+                    connection, transaction);
+                removePhoto.Parameters.AddWithValue("cabinetId", cabinetId);
+                removePhoto.Parameters.AddWithValue("page", page);
+                removePhoto.ExecuteNonQuery();
+                if (page == 1)
+                {
+                    using var clearLegacyPhoto = new NpgsqlCommand(@"
+                        UPDATE cabinet_profiles
+                        SET reference_photo = NULL, reference_photo_content_type = 'image/jpeg', updated_at = NOW()
+                        WHERE id = @cabinetId
+                    ", connection, transaction);
+                    clearLegacyPhoto.Parameters.AddWithValue("cabinetId", cabinetId);
+                    clearLegacyPhoto.ExecuteNonQuery();
+                }
+            }
+
+            foreach (var upload in photoUploads)
+            {
+                using var photoCommand = new NpgsqlCommand(@"
+                    INSERT INTO cabinet_photos (cabinet_id, page_number, image_data, content_type, caption, updated_at)
+                    VALUES (@cabinetId, @page, @image, @type, @caption, NOW())
+                    ON CONFLICT (cabinet_id, page_number) DO UPDATE SET
+                        image_data = EXCLUDED.image_data,
+                        content_type = EXCLUDED.content_type,
+                        caption = EXCLUDED.caption,
+                        updated_at = NOW()
+                ", connection, transaction);
+                photoCommand.Parameters.AddWithValue("cabinetId", cabinetId);
+                photoCommand.Parameters.AddWithValue("page", upload.page);
+                photoCommand.Parameters.Add("image", NpgsqlDbType.Bytea).Value = upload.bytes;
+                photoCommand.Parameters.AddWithValue("type", upload.type);
+                photoCommand.Parameters.AddWithValue("caption", upload.caption);
+                photoCommand.ExecuteNonQuery();
+            }
+
+            using (var deactivate = new NpgsqlCommand(@"
+                UPDATE cabinet_checklist_items
+                SET is_active = FALSE,
+                    item_name = '__inventory_archived_' || id::text || '_' || txid_current()::text
+                WHERE cabinet_id = @cabinetId AND is_active = TRUE
+            ", connection, transaction))
+            {
+                deactivate.Parameters.AddWithValue("cabinetId", cabinetId);
+                deactivate.ExecuteNonQuery();
+            }
+            foreach (var item in cleanedItems)
+            {
+                if (item.id > 0)
+                {
+                    using var update = new NpgsqlCommand(@"
+                        UPDATE cabinet_checklist_items
+                        SET item_name = @name, description = @description, sort_order = @sortOrder, is_active = TRUE
+                        WHERE id = @id AND cabinet_id = @cabinetId
+                    ", connection, transaction);
+                    update.Parameters.AddWithValue("id", item.id);
+                    update.Parameters.AddWithValue("cabinetId", cabinetId);
+                    update.Parameters.AddWithValue("name", item.name!);
+                    update.Parameters.Add("description", NpgsqlDbType.Text).Value = string.IsNullOrWhiteSpace(item.description)
+                        ? DBNull.Value
+                        : item.description!;
+                    update.Parameters.AddWithValue("sortOrder", item.sortOrder);
+                    if (update.ExecuteNonQuery() == 0)
+                    { transaction.Rollback(); return Results.BadRequest(new { message = "Пункт списка не относится к выбранному шкафу. Обновите страницу." }); }
+                }
+                else
+                {
+                    using var insert = new NpgsqlCommand(@"
+                        INSERT INTO cabinet_checklist_items (cabinet_id, item_name, description, sort_order, is_active)
+                        VALUES (@cabinetId, @name, @description, @sortOrder, TRUE)
+                        ON CONFLICT (cabinet_id, item_name) DO UPDATE SET
+                            description = EXCLUDED.description,
+                            sort_order = EXCLUDED.sort_order,
+                            is_active = TRUE
+                    ", connection, transaction);
+                    insert.Parameters.AddWithValue("cabinetId", cabinetId);
+                    insert.Parameters.AddWithValue("name", item.name!);
+                    insert.Parameters.Add("description", NpgsqlDbType.Text).Value = string.IsNullOrWhiteSpace(item.description)
+                        ? DBNull.Value
+                        : item.description!;
+                    insert.Parameters.AddWithValue("sortOrder", item.sortOrder);
+                    insert.ExecuteNonQuery();
+                }
+            }
+            transaction.Commit();
+            return Results.Ok(new { success = true, message = "Данные шкафа сохранены" });
+        })
+        .WithTags("Admin: Inventory")
+        .WithSummary("Создать или обновить карточку шкафа, фотографию и перечень")
+        .Produces(200)
+        .Produces(400)
+        .Produces(404);
+
+        endpoints.MapGet("/api/admin/inventory/runs", (int? limit) =>
+        {
+            var runs = new List<object>();
+            using var connection = new NpgsqlConnection(connectionString);
+            connection.Open();
+            using var command = new NpgsqlCommand(@"
+                SELECT r.id, r.completed_at, u.full_name, u.department,
+                       c.title, q.code,
+                       COUNT(i.id) FILTER (WHERE i.status = 'present') AS present_count,
+                       COUNT(i.id) FILTER (WHERE i.status = 'missing') AS missing_count
+                FROM inventory_runs r
+                JOIN users u ON u.id = r.user_id
+                JOIN cabinet_profiles c ON c.id = r.cabinet_id
+                JOIN qr_codes q ON q.id = r.qr_code_id
+                LEFT JOIN inventory_run_items i ON i.inventory_run_id = r.id
+                GROUP BY r.id, u.full_name, u.department, c.title, q.code
+                ORDER BY r.completed_at DESC
+                LIMIT @limit
+            ", connection);
+            command.Parameters.AddWithValue("limit", Math.Clamp(limit ?? 100, 1, 500));
+            using var reader = command.ExecuteReader();
+            while (reader.Read())
+            {
+                runs.Add(new
+                {
+                    id = reader.GetInt64(0),
+                    completedAt = reader.GetDateTime(1),
+                    userFullName = reader.GetString(2),
+                    userDepartment = reader.GetString(3),
+                    cabinetTitle = reader.GetString(4),
+                    qrCode = reader.GetString(5),
+                    presentCount = reader.GetInt64(6),
+                    missingCount = reader.GetInt64(7)
+                });
+            }
+            return Results.Ok(runs);
+        })
+        .WithTags("Admin: Inventory")
+        .WithSummary("Последние отправленные инвентаризации")
+        .WithDescription("Возвращает сводку по сотруднику, шкафу и отметкам. Подробности доступны отдельным запросом.")
+        .Produces(200);
+
+        endpoints.MapGet("/api/admin/inventory/runs/{runId:long}", (long runId) =>
+        {
+            using var connection = new NpgsqlConnection(connectionString);
+            connection.Open();
+            long id;
+            Guid clientRunId;
+            DateTime startedAt;
+            DateTime completedAt;
+            long userId;
+            string userFullName;
+            string userDepartment;
+            string cabinetTitle;
+            string qrCode;
+            using (var command = new NpgsqlCommand(@"
+                SELECT r.id, r.client_run_id, r.started_at, r.completed_at,
+                       r.user_id, u.full_name, u.department, c.title, q.code
+                FROM inventory_runs r
+                JOIN users u ON u.id = r.user_id
+                JOIN cabinet_profiles c ON c.id = r.cabinet_id
+                JOIN qr_codes q ON q.id = r.qr_code_id
+                WHERE r.id = @runId
+            ", connection))
+            {
+                command.Parameters.AddWithValue("runId", runId);
+                using var reader = command.ExecuteReader();
+                if (!reader.Read()) return Results.NotFound(new { message = "Инвентаризация не найдена" });
+                id = reader.GetInt64(0);
+                clientRunId = reader.GetGuid(1);
+                startedAt = reader.GetDateTime(2);
+                completedAt = reader.GetDateTime(3);
+                userId = reader.GetInt64(4);
+                userFullName = reader.GetString(5);
+                userDepartment = reader.GetString(6);
+                cabinetTitle = reader.GetString(7);
+                qrCode = reader.GetString(8);
+            }
+
+            var items = new List<object>();
+            using (var command = new NpgsqlCommand(@"
+                SELECT item_name_snapshot, status, COALESCE(comment, '')
+                FROM inventory_run_items
+                WHERE inventory_run_id = @runId
+                ORDER BY id
+            ", connection))
+            {
+                command.Parameters.AddWithValue("runId", runId);
+                using var reader = command.ExecuteReader();
+                while (reader.Read())
+                    items.Add(new { itemName = reader.GetString(0), status = reader.GetString(1), comment = reader.GetString(2) });
+            }
+
+            return Results.Ok(new
+            {
+                id, clientRunId, startedAt, completedAt, userId, userFullName,
+                userDepartment, cabinetTitle, qrCode, items
+            });
+        })
+        .WithTags("Admin: Inventory")
+        .WithSummary("Подробности выбранной инвентаризации")
+        .WithDescription("Показывает выбор сотрудника по каждому пункту чек-листа и его комментарий.")
+        .Produces(200)
+        .Produces(404);
+
+        return endpoints;
+    }
+
+    private static SaveRunResult SaveRun(NpgsqlConnection connection, InventoryRunSyncItem run)
+    {
+        if (run.clientRunId == Guid.Empty)
+            throw new ArgumentException("Проверка пропущена: отсутствует clientRunId.");
+        if (run.userId <= 0 || run.userId > int.MaxValue || string.IsNullOrWhiteSpace(run.qrCode))
+            throw new ArgumentException("Проверка пропущена: не указан сотрудник или QR.");
+        if (run.items == null || run.items.Count == 0)
+            throw new ArgumentException("Проверка пропущена: список предметов пуст.");
+
+        var duplicateItem = run.items.GroupBy(item => item.itemId).FirstOrDefault(group => group.Count() > 1);
+        if (duplicateItem != null)
+            throw new ArgumentException("Проверка пропущена: предмет повторяется в списке.");
+        if (run.items.Any(item => item.itemId <= 0 || (item.status != "present" && item.status != "missing")))
+            throw new ArgumentException("Проверка пропущена: для каждого предмета выберите «Есть» или «Нет».");
+
+        using var transaction = connection.BeginTransaction();
+
+        using (var existingCommand = new NpgsqlCommand(
+                   "SELECT id FROM inventory_runs WHERE client_run_id = @clientRunId",
+                   connection, transaction))
+        {
+            existingCommand.Parameters.AddWithValue("clientRunId", run.clientRunId);
+            if (existingCommand.ExecuteScalar() is not null)
+            {
+                transaction.Rollback();
+                return SaveRunResult.Duplicate;
+            }
+        }
+
+        using (var userCommand = new NpgsqlCommand(
+                   "SELECT 1 FROM users WHERE id = @userId AND is_active = TRUE",
+                   connection, transaction))
+        {
+            userCommand.Parameters.AddWithValue("userId", run.userId);
+            if (userCommand.ExecuteScalar() is null)
+                throw new ArgumentException("Проверка пропущена: сотрудник не найден или отключён.");
+        }
+
+        long cabinetId;
+        long qrCodeId;
+        string cabinetTitle;
+        using (var cabinetCommand = new NpgsqlCommand(@"
+            SELECT c.id, q.id, c.title
+            FROM cabinet_profiles c
+            JOIN qr_codes q ON q.id = c.qr_code_id
+            WHERE q.code = ANY(@codes) AND q.is_active = TRUE AND c.is_active = TRUE
+            LIMIT 1
+        ", connection, transaction))
+        {
+            cabinetCommand.Parameters.AddWithValue("codes", ExpandQr(run.qrCode).ToArray());
+            using var reader = cabinetCommand.ExecuteReader();
+            if (!reader.Read())
+                throw new ArgumentException("Проверка пропущена: шкаф для QR не найден.");
+            cabinetId = reader.GetInt64(0);
+            qrCodeId = reader.GetInt64(1);
+            cabinetTitle = reader.GetString(2);
+        }
+
+        var requestedIds = run.items.Select(item => item.itemId).ToArray();
+        var itemNames = new Dictionary<long, string>();
+        using (var itemCommand = new NpgsqlCommand(@"
+            SELECT id, item_name
+            FROM cabinet_checklist_items
+            WHERE cabinet_id = @cabinetId AND is_active = TRUE AND id = ANY(@itemIds)
+        ", connection, transaction))
+        {
+            itemCommand.Parameters.AddWithValue("cabinetId", cabinetId);
+            itemCommand.Parameters.AddWithValue("itemIds", requestedIds);
+            using var reader = itemCommand.ExecuteReader();
+            while (reader.Read()) itemNames[reader.GetInt64(0)] = reader.GetString(1);
+        }
+
+        if (itemNames.Count != requestedIds.Length)
+            throw new ArgumentException("Проверка пропущена: перечень шкафа изменился, обновите данные в приложении.");
+
+        using (var countCommand = new NpgsqlCommand(@"
+            SELECT COUNT(*) FROM cabinet_checklist_items
+            WHERE cabinet_id = @cabinetId AND is_active = TRUE
+        ", connection, transaction))
+        {
+            countCommand.Parameters.AddWithValue("cabinetId", cabinetId);
+            if (Convert.ToInt32(countCommand.ExecuteScalar()) != requestedIds.Length)
+                throw new ArgumentException("Проверка пропущена: в сохранённом перечне не все предметы.");
+        }
+
+        var startedAt = ParseTime(run.startedAt, DateTimeOffset.UtcNow);
+        var completedAt = ParseTime(run.completedAt, DateTimeOffset.UtcNow);
+        if (completedAt < startedAt)
+            throw new ArgumentException("Проверка пропущена: время завершения раньше времени начала.");
+
+        long inventoryRunId;
+        using (var insertRun = new NpgsqlCommand(@"
+            INSERT INTO inventory_runs
+                (client_run_id, cabinet_id, user_id, qr_code_id, started_at, completed_at)
+            VALUES (@clientRunId, @cabinetId, @userId, @qrCodeId, @startedAt, @completedAt)
+            RETURNING id
+        ", connection, transaction))
+        {
+            insertRun.Parameters.AddWithValue("clientRunId", run.clientRunId);
+            insertRun.Parameters.AddWithValue("cabinetId", cabinetId);
+            insertRun.Parameters.AddWithValue("userId", (int)run.userId);
+            insertRun.Parameters.AddWithValue("qrCodeId", qrCodeId);
+            insertRun.Parameters.AddWithValue("startedAt", startedAt.UtcDateTime);
+            insertRun.Parameters.AddWithValue("completedAt", completedAt.UtcDateTime);
+            inventoryRunId = Convert.ToInt64(insertRun.ExecuteScalar());
+        }
+
+        foreach (var item in run.items)
+        {
+            using var insertItem = new NpgsqlCommand(@"
+                INSERT INTO inventory_run_items
+                    (inventory_run_id, checklist_item_id, item_name_snapshot, status, comment)
+                VALUES (@runId, @itemId, @itemName, @status, @comment)
+            ", connection, transaction);
+            insertItem.Parameters.AddWithValue("runId", inventoryRunId);
+            insertItem.Parameters.AddWithValue("itemId", item.itemId);
+            insertItem.Parameters.AddWithValue("itemName", itemNames[item.itemId]);
+            insertItem.Parameters.AddWithValue("status", item.status);
+            insertItem.Parameters.AddWithValue("comment", string.IsNullOrWhiteSpace(item.comment)
+                ? (object)DBNull.Value
+                : item.comment.Trim());
+            insertItem.ExecuteNonQuery();
+        }
+
+        using (var logCommand = new NpgsqlCommand(@"
+            INSERT INTO inventory_sessions (user_id, qr_code_id, action, comment, action_time)
+            VALUES (@userId, @qrCodeId, 'inventory', @comment, @completedAt)
+        ", connection, transaction))
+        {
+            int present = run.items.Count(item => item.status == "present");
+            int missing = run.items.Count - present;
+            logCommand.Parameters.AddWithValue("userId", run.userId);
+            logCommand.Parameters.AddWithValue("qrCodeId", qrCodeId);
+            logCommand.Parameters.AddWithValue("comment", $"Инвентаризация «{cabinetTitle}»: есть {present}, нет {missing}");
+            logCommand.Parameters.AddWithValue("completedAt", completedAt.UtcDateTime);
+            logCommand.ExecuteNonQuery();
+        }
+
+        transaction.Commit();
+        return SaveRunResult.Imported;
+    }
+
+    private static IEnumerable<string> ExpandQr(string value)
+    {
+        var trimmed = value.Trim();
+        yield return trimmed;
+        if (!Uri.TryCreate(trimmed, UriKind.Absolute, out var uri)) yield break;
+
+        var tail = Uri.UnescapeDataString(uri.AbsolutePath.TrimEnd('/').Split('/').LastOrDefault() ?? "");
+        if (!string.IsNullOrWhiteSpace(tail) && !string.Equals(tail, trimmed, StringComparison.Ordinal))
+            yield return tail;
+    }
+
+    private static DateTimeOffset ParseTime(string? value, DateTimeOffset fallback) =>
+        DateTimeOffset.TryParse(value, System.Globalization.CultureInfo.InvariantCulture,
+            System.Globalization.DateTimeStyles.RoundtripKind, out var parsed)
+            ? parsed
+            : fallback;
+
+    private enum SaveRunResult { Imported, Duplicate }
+}
+
+public sealed class AdminCabinetDto
+{
+    public string title { get; set; } = string.Empty;
+    public string? photoBase64 { get; set; }
+    public string? photoContentType { get; set; }
+    public List<AdminCabinetPhotoDto>? photos { get; set; }
+    public List<int>? removePhotoPages { get; set; }
+    public List<AdminChecklistItemDto> items { get; set; } = new();
+}
+
+public sealed class AdminCabinetPhotoDto
+{
+    public int pageNumber { get; set; }
+    public string? caption { get; set; }
+    public string? imageBase64 { get; set; }
+    public string? contentType { get; set; }
+}
+
+public sealed class AdminChecklistItemDto
+{
+    public long id { get; set; }
+    public string? name { get; set; }
+    public string? description { get; set; }
+    public int sortOrder { get; set; }
+}
+
+public sealed class InventoryRunSyncPayload
+{
+    public List<InventoryRunSyncItem> items { get; set; } = new();
+}
+
+public sealed class InventoryRunSyncItem
+{
+    public Guid clientRunId { get; set; }
+    public long userId { get; set; }
+    public string qrCode { get; set; } = string.Empty;
+    public string startedAt { get; set; } = string.Empty;
+    public string completedAt { get; set; } = string.Empty;
+    public List<InventoryRunSyncResult> items { get; set; } = new();
+}
+
+public sealed class InventoryRunSyncResult
+{
+    public long itemId { get; set; }
+    public string status { get; set; } = string.Empty;
+    public string? comment { get; set; }
+}

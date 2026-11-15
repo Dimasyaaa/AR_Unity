@@ -2,6 +2,7 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using UnityEngine.InputSystem;
+using UnityEngine.UI;
 using UnityEngine.XR.Interaction.Toolkit.Samples.StarterAssets;
 
 namespace UnityEngine.XR.Templates.AR
@@ -180,6 +181,27 @@ namespace UnityEngine.XR.Templates.AR
         bool m_AllGoalsFinished;
         int m_SurfacesTapped;
         int m_CurrentGoalIndex = 0;
+
+        void Start()
+        {
+            // The GreetingCTA prefab cannot hold a scene reference to this GoalManager.
+            // Bind its visible "Начать" button here so the existing onboarding cards run.
+            if (m_GreetingPrompt == null)
+                return;
+
+            var buttons = m_GreetingPrompt.GetComponentsInChildren<Button>(true);
+            foreach (var button in buttons)
+            {
+                if (button.gameObject.name != "Button")
+                    continue;
+
+                button.onClick.RemoveListener(StartCoaching);
+                button.onClick.AddListener(StartCoaching);
+                return;
+            }
+
+            Debug.LogWarning("[AR Onboarding] Не найдена кнопка «Начать» в Greeting Prompt.", this);
+        }
 
         void Update()
         {

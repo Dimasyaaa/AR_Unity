@@ -159,7 +159,20 @@ flowchart TB
 
 ```text
 AR_Unity/
-├── Assets/              # Unity: сцены, скрипты, префабы, плагины
+├── Assets/
+│   ├── App/              # Собственные сцены, код и инструменты приложения
+│   │   ├── DatabaseTools/ # Инструменты базы данных (редакторский код внутри Editor)
+│   │   ├── Content/      # Карточки, логотипы и иконки приложения
+│   │   ├── Scenes/       # LoginScene, StartScene, SampleScene
+│   │   └── Scripts/      # Managers, Local, QR, Voice, AR, UI, Network
+│   ├── Plugins/          # Android-модуль и инструменты редактора
+│   ├── Resources/        # Ресурсы, загружаемые Unity по имени во время работы
+│   ├── Settings/         # Активные настройки URP и рендерера
+│   ├── StreamingAssets/  # Специальная папка Unity для файлов в исходном виде
+│   │   └── InventoryDatabase/inventory.db # Локальная база приложения
+│   ├── MobileARTemplateAssets/ # Исходные ресурсы AR-шаблона
+│   ├── TextMesh Pro/     # Ресурсы TextMesh Pro
+│   └── Samples/          # Примеры пакетов Unity
 ├── Backend/             # Сервер (ASP.NET Core Web API)
 │   ├── Program.cs       #   точка входа, конфигурация API
 │   ├── appsettings.json #   строка подключения к PostgreSQL
@@ -169,10 +182,12 @@ AR_Unity/
 ├── Packages/            # Пакеты Unity (XR Interaction Toolkit и др.)
 ├── ProjectSettings/     # Настройки проекта Unity
 ├── docs/screenshots/    # Скриншоты для документации
-└── AR_Unity.sln         # Решение C#
+└── AR_Unity.slnx        # Решение C# для IDE
 ```
 
 ---
+
+Подробная карта каталогов, различия между NuGet и UPM-пакетами, а также правила безопасного перемещения Unity-ресурсов описаны в [документе о структуре проекта](docs/PROJECT_STRUCTURE.md).
 
 ## 7. Сервер и данные
 

@@ -63,8 +63,8 @@ Recordings/
 # Asset Store downloads
 Assets/AssetStoreTools*
 
-# Burst Debug Info
-KgmkAR_BurstDebugInformation_DoNotShip/
+# Burst-generated debug artifacts
+*_BurstDebugInformation_DoNotShip/
 
 # Android Keystores
 *.keystore
@@ -77,6 +77,7 @@ local.properties
 # Папки сборки бэкенда
 Backend/bin/
 Backend/obj/
+Backend/Database/*.log
 
 # Локальные настройки с паролем от БД 
 Backend/appsettings.Development.json

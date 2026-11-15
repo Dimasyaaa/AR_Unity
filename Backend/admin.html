@@ -4,18 +4,26 @@
 		<meta charset="UTF-8">
 			<meta name="viewport" content="width=device-width, initial-scale=1.0">
 				<title>AR Inventory -- Админка</title>
-				<link rel="stylesheet" href="style.css">
+				<link rel="stylesheet" href="style.css?v=inventory-2">
 </head>
 	<body>
 		<div class="container">
 			<header>
-				<h1>AR Inventory</h1>
-				<div class="hint">Панель администратора</div>
+				<div class="brand-lockup">
+					<div class="brand-mark">AR</div>
+					<div><h1>AR Inventory</h1><div class="hint">Рабочее пространство администратора</div></div>
+				</div>
+				<div class="header-actions">
+					<div class="health-pill" id="api-status"><span class="health-dot"></span><span>Проверяем API…</span></div>
+					<a class="btn btn-api" href="/swagger" target="_blank" rel="noopener noreferrer">Документация API <span aria-hidden="true">↗</span></a>
+				</div>
 			</header>
 
 			<div class="tabs">
 				<button class="tab active" data-tab="users">Пользователи</button>
 				<button class="tab" data-tab="qr">QR-коды</button>
+				<button class="tab" data-tab="inventory">Шкафы</button>
+				<button class="tab" data-tab="runs">Инвентаризации</button>
 				<button class="tab" data-tab="sessions">Журнал</button>
 			</div>
 
@@ -91,6 +99,38 @@
 					<tbody id="sessions-body"></tbody>
 				</table>
 			</div>
+
+			<div class="panel" id="panel-inventory" style="display:none;">
+				<div class="panel-header">
+					<div>
+						<h2>Шкафы и чек-листы</h2>
+						<p class="hint">Настройте фото и список предметов для QR-кода шкафа.</p>
+					</div>
+					<div class="header-controls">
+						<input type="text" class="search" id="search-inventory" placeholder="Поиск по QR или шкафу...">
+						<button class="btn btn-primary" onclick="openNewInventoryCabinet()">Добавить шкаф</button>
+						<button class="btn btn-secondary" onclick="loadInventoryCabinets()">Обновить</button>
+					</div>
+				</div>
+				<table>
+					<thead><tr><th>QR-код</th><th>Шкаф</th><th>Фото</th><th>Предметов</th><th></th></tr></thead>
+					<tbody id="inventory-cabinets-body"></tbody>
+				</table>
+			</div>
+
+			<div class="panel" id="panel-runs" style="display:none;">
+				<div class="panel-header">
+					<div><h2>Результаты инвентаризации</h2><p class="hint">Здесь видны отметки «Есть» и «Нет», отправленные сотрудниками с AR-карточки.</p></div>
+					<div class="header-controls">
+						<input type="text" class="search" id="search-runs" placeholder="Сотрудник, шкаф или QR-код…">
+						<button class="btn btn-secondary" onclick="loadInventoryRuns()">Обновить</button>
+					</div>
+				</div>
+				<div class="table-wrap"><table>
+					<thead><tr><th>Дата проверки</th><th>Сотрудник</th><th>Отдел</th><th>Шкаф</th><th>Результат</th><th></th></tr></thead>
+					<tbody id="inventory-runs-body"></tbody>
+				</table></div>
+			</div>
 		</div>
 
 		<div class="modal-overlay" id="modal-user">
@@ -152,8 +192,53 @@
 				</div>
 		</div>
 
+		<div class="modal-overlay" id="modal-inventory">
+			<div class="modal modal-wide">
+				<h3>Карточка шкафа</h3>
+				<input type="hidden" id="inventory-qr-id">
+				<div class="form-group"><label>QR-код</label><input id="inventory-qr-code" type="text" readonly></div>
+				<div class="form-group"><label>Название шкафа</label><input id="inventory-title" type="text" placeholder="Например, Шкаф № 4"></div>
+				<div class="form-group">
+					<label>Фотографии шкафа — две страницы по желанию (JPEG, PNG, WebP; до 8 МБ на файл)</label>
+					<div class="photo-upload-grid">
+						<div class="photo-upload-card"><strong>Лист 1</strong><div class="photo-preview" id="inventory-photo-preview-1">Фото не загружено</div><input id="inventory-photo-1" type="file" accept="image/jpeg,image/png,image/webp"><div class="hint" id="inventory-photo-hint-1">Основной вид шкафа</div><button type="button" class="btn btn-secondary btn-sm photo-remove" id="inventory-photo-remove-1" onclick="toggleRemovePhoto(1)" hidden>Удалить фото</button></div>
+						<div class="photo-upload-card"><strong>Лист 2</strong><div class="photo-preview" id="inventory-photo-preview-2">Фото не загружено</div><input id="inventory-photo-2" type="file" accept="image/jpeg,image/png,image/webp"><div class="hint" id="inventory-photo-hint-2">Дополнительный ракурс</div><button type="button" class="btn btn-secondary btn-sm photo-remove" id="inventory-photo-remove-2" onclick="toggleRemovePhoto(2)" hidden>Удалить фото</button></div>
+					</div>
+				</div>
+				<div class="form-group">
+					<label>Чек-лист — один предмет на строку</label>
+					<textarea id="inventory-items" rows="10" placeholder="Ключ гаечный 13 мм&#10;Перчатки защитные&#10;Переносной фонарь"></textarea>
+					<div class="hint">После сохранения приложение получит обновлённый список при экспорте базы в SQLite.</div>
+				</div>
+				<div class="modal-actions">
+					<button class="btn btn-secondary" onclick="closeModal('modal-inventory')">Отмена</button>
+					<button class="btn btn-primary" onclick="saveInventoryCabinet()">Сохранить шкаф</button>
+				</div>
+			</div>
+		</div>
+		<div class="modal-overlay" id="modal-new-inventory-cabinet">
+			<div class="modal modal-small">
+				<h3>Добавить шкаф</h3>
+				<p class="hint">Выберите QR-код, который закреплён за шкафом. Для него будет создан чек-лист.</p>
+				<div class="form-group"><label>Свободный QR-код</label><select id="new-inventory-qr"></select></div>
+				<div class="modal-actions">
+					<button class="btn btn-secondary" onclick="closeModal('modal-new-inventory-cabinet')">Отмена</button>
+					<button class="btn btn-primary" onclick="createInventoryCabinetFromQr()">Продолжить</button>
+				</div>
+			</div>
+		</div>
+
+		<div class="modal-overlay" id="modal-inventory-run">
+			<div class="modal modal-wide">
+				<div class="modal-title-row"><div><span class="eyebrow">ПРОВЕРКА ШКАФА</span><h3 id="inventory-run-title">Результат инвентаризации</h3></div><button class="icon-button" onclick="closeModal('modal-inventory-run')" aria-label="Закрыть">×</button></div>
+				<div id="inventory-run-meta" class="run-meta"></div>
+				<div class="table-wrap"><table class="run-items-table"><thead><tr><th>Предмет</th><th>Отметка сотрудника</th><th>Комментарий</th></tr></thead><tbody id="inventory-run-items"></tbody></table></div>
+				<div class="modal-actions"><button class="btn btn-secondary" onclick="closeModal('modal-inventory-run')">Закрыть</button></div>
+			</div>
+		</div>
+
 		<div class="toast" id="toast"></div>
 
-		<script src="main.js"></script>
+		<script src="main.js?v=inventory-2"></script>
 	</body>
 </html>

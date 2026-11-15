@@ -13,16 +13,12 @@ var builder = WebApplication.CreateBuilder(args);
 // настройки подключения к бд
 // Пароль читается из appsettings.Development.json (у каждого компьютера свой).
 // Запасной вариант на случай отсутствия файла:
-var connectionString = builder.Configuration.GetConnectionString("DefaultConnection");
-if (string.IsNullOrEmpty(connectionString))
+var connectionString = builder.Configuration.GetConnectionString("DefaultConnection")
+    ?? Environment.GetEnvironmentVariable("AR_INVENTORY_DB_CONNECTION");
+if (string.IsNullOrWhiteSpace(connectionString))
 {
-    connectionString =
-        "Host=localhost;" +
-        "Port=5432;" +
-        "Database=ar_inventory;" +
-        "Username=postgres;" +
-        "Password=123456Qw;" +
-        "SSL Mode=Disable;";
+    throw new InvalidOperationException(
+        "Database connection is not configured. Set ConnectionStrings:DefaultConnection in a local appsettings.Development.json or AR_INVENTORY_DB_CONNECTION in the environment.");
 }
 
 builder.Services.AddEndpointsApiExplorer();
@@ -56,11 +52,27 @@ var app = builder.Build();
 
 app.UseCors("AllowAll");
 
-// Раздача статики (admin.html, style.css, main.js) из корня проекта
+// Раздача статики. При запуске DLL из другой рабочей папки ContentRootPath
+// может указывать на корень Unity-проекта, где файлов админки нет. Сначала
+// ищем файлы рядом с собранным сервером, затем используем ContentRootPath.
+var staticRoot = new[]
+    {
+        AppContext.BaseDirectory,
+        app.Environment.ContentRootPath,
+        Path.Combine(app.Environment.ContentRootPath, "Backend")
+    }
+    .Distinct(StringComparer.OrdinalIgnoreCase)
+    .FirstOrDefault(path => File.Exists(Path.Combine(path, "admin.html")));
+
+if (staticRoot == null)
+{
+    staticRoot = app.Environment.ContentRootPath;
+    app.Logger.LogWarning("Admin static files were not found beside the server. Using content root: {StaticRoot}", staticRoot);
+}
+
 app.UseStaticFiles(new StaticFileOptions
 {
-    FileProvider = new Microsoft.Extensions.FileProviders.PhysicalFileProvider(
-        app.Environment.ContentRootPath)
+    FileProvider = new Microsoft.Extensions.FileProviders.PhysicalFileProvider(staticRoot)
 });
 
 // Короткий адрес для админки
@@ -98,7 +110,7 @@ app.UseSwaggerUI(options =>
     ";
 });
 
-app.MapGet("/", () => Results.Redirect("/swagger"));
+app.MapGet("/", () => Results.Redirect("/admin.html"));
 
 app.MapGet("/api/health", () =>
 {
@@ -198,7 +210,7 @@ app.MapPost("/api/auth/login", (LoginRequest request) =>
         }, statusCode: 401);
     }
 
-    var userId = reader.GetInt64(0);
+    var userId = Convert.ToInt64(reader.GetValue(0));
     var dbFullName = reader.GetString(1);
     var dbDepartment = reader.GetString(2);
 
@@ -861,7 +873,15 @@ app.MapPost("/api/sync/sessions", (SyncPayloadDto payload) =>
 
         using var cmd = new NpgsqlCommand(@"
             INSERT INTO inventory_sessions (user_id, qr_code_id, action, comment, action_time)
-            VALUES (@userId, @qrId, @action, @comment, @time)
+            SELECT @userId, @qrId, @action, @comment, @time
+            WHERE NOT EXISTS (
+                SELECT 1 FROM inventory_sessions existing
+                WHERE existing.user_id = @userId
+                  AND existing.qr_code_id IS NOT DISTINCT FROM @qrId
+                  AND existing.action = @action
+                  AND existing.comment IS NOT DISTINCT FROM @comment
+                  AND existing.action_time = @time
+            )
         ", conn);
         cmd.Parameters.AddWithValue("@userId", userId);
         cmd.Parameters.AddWithValue("@qrId", qrParam);
@@ -869,12 +889,14 @@ app.MapPost("/api/sync/sessions", (SyncPayloadDto payload) =>
         cmd.Parameters.AddWithValue("@comment", string.IsNullOrEmpty(s.comment) ? (object)DBNull.Value : s.comment);
         // ИСПРАВЛЕНО: используем уже распарсенную переменную time (UTC), а не s.actionTime (строка)
         cmd.Parameters.AddWithValue("@time", time);
-        cmd.ExecuteNonQuery();
-        imported++;
+        if (cmd.ExecuteNonQuery() > 0) imported++;
+        else skipped++;
     }
 
     return Results.Ok(new { imported, skipped });
 });
+
+app.MapInventoryApi(connectionString);
 
 app.Run();
 
