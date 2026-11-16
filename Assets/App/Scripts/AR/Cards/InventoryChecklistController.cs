@@ -12,6 +12,7 @@ public sealed class InventoryChecklistController : MonoBehaviour
 {
     public static InventoryChecklistController Active { get; private set; }
     public static bool Exists => Active != null;
+    public IReadOnlyList<string> VoiceItemNames => itemNames.Values.ToList();
 
     private LocalCabinetProfile localCabinet;
     private InventoryCabinetResponse serverCabinet;

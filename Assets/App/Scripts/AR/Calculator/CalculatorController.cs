@@ -45,7 +45,9 @@ public class CalculatorController : MonoBehaviour
             string[] labels = { "7", "8", "9", "/", "4", "5", "6", "*", "1", "2", "3", "-", "C", "0", "=", "+" };
             foreach (var label in labels)
             {
-                var button = grid.Find("Btn_" + label)?.GetComponent<Button>();
+                // Transform.Find treats '/' as a hierarchy path separator. The
+                // division button is named "Btn_/", so search direct children.
+                var button = FindDirectChild(grid, "Btn_" + label)?.GetComponent<Button>();
                 if (button != null) button.onClick.AddListener(() => OnButton(label));
             }
         }
@@ -142,6 +144,30 @@ public class CalculatorController : MonoBehaviour
         SetDisplay(expression);
     }
 
+    public void PressFromVoice(string label)
+    {
+        if (label == "×") label = "*";
+        if (label == "÷") label = "/";
+        if (label == "очистить") label = "C";
+        if (label == "равно") label = "=";
+        if (label == "умножить") label = "*";
+        if (label == "разделить") label = "/";
+        OnButton(label);
+    }
+
+    public bool EvaluateVoiceExpression(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return false;
+        string normalized = value.Replace(',', '.').Replace(" ", string.Empty);
+        foreach (char c in normalized)
+            if (!char.IsDigit(c) && c != '.' && c != '+' && c != '-' && c != '*' && c != '/')
+                return false;
+
+        expression = normalized;
+        OnEquals();
+        return true;
+    }
+
     private void OnEquals()
     {
         char op = '\0';
@@ -214,6 +240,15 @@ public class CalculatorController : MonoBehaviour
     {
         if (displayText != null)
             displayText.text = text;
+    }
+
+    private static Transform FindDirectChild(Transform parent, string childName)
+    {
+        foreach (Transform child in parent)
+            if (child.name == childName)
+                return child;
+
+        return null;
     }
 
     private GameObject CreateUIObject(string name, Transform parent)

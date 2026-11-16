@@ -475,6 +475,43 @@ public static class InventoryApi
         .Produces(400)
         .Produces(404);
 
+        endpoints.MapDelete("/api/admin/inventory/cabinets/{qrCodeId:long}", (long qrCodeId) =>
+        {
+            using var connection = new NpgsqlConnection(connectionString);
+            connection.Open();
+            using var transaction = connection.BeginTransaction();
+            var deletion = DeleteQrDependencies(connection, transaction, qrCodeId, requireCabinet: true);
+            if (deletion is null)
+            {
+                transaction.Rollback();
+                return Results.NotFound(new { success = false, message = "Шкаф не найден" });
+            }
+
+            using (var command = new NpgsqlCommand(
+                "DELETE FROM qr_codes WHERE id = @qrCodeId", connection, transaction))
+            {
+                command.Parameters.AddWithValue("qrCodeId", qrCodeId);
+                command.ExecuteNonQuery();
+            }
+
+            transaction.Commit();
+            return Results.Ok(new
+            {
+                success = true,
+                message = "Шкаф, его QR-код и история удалены",
+                deletedRunItems = deletion.Value.DeletedRunItems,
+                deletedRuns = deletion.Value.DeletedRuns,
+                deletedChecklistItems = deletion.Value.DeletedChecklistItems,
+                deletedPhotos = deletion.Value.DeletedPhotos,
+                deletedEvents = deletion.Value.DeletedEvents
+            });
+        })
+        .WithTags("Admin: Inventory")
+        .WithSummary("Полностью удалить шкаф вместе с QR-кодом и историей")
+        .WithDescription("Транзакционно удаляет историю и отметки, чек-лист, фотографии, шкаф и связанный QR-код.")
+        .Produces(200)
+        .Produces(404);
+
         endpoints.MapGet("/api/admin/inventory/runs", (int? limit) =>
         {
             var runs = new List<object>();
@@ -556,10 +593,11 @@ public static class InventoryApi
 
             var items = new List<object>();
             using (var command = new NpgsqlCommand(@"
-                SELECT item_name_snapshot, status, COALESCE(comment, '')
-                FROM inventory_run_items
-                WHERE inventory_run_id = @runId
-                ORDER BY id
+                SELECT runItem.item_name_snapshot, runItem.status, COALESCE(runItem.comment, '')
+                FROM inventory_run_items runItem
+                JOIN cabinet_checklist_items checklistItem ON checklistItem.id = runItem.checklist_item_id
+                WHERE runItem.inventory_run_id = @runId
+                ORDER BY checklistItem.sort_order, checklistItem.id, runItem.id
             ", connection))
             {
                 command.Parameters.AddWithValue("runId", runId);
@@ -581,6 +619,82 @@ public static class InventoryApi
         .Produces(404);
 
         return endpoints;
+    }
+
+    public static (long? CabinetId, int DeletedRunItems, int DeletedRuns, int DeletedChecklistItems, int DeletedPhotos, int DeletedEvents)?
+        DeleteQrDependencies(NpgsqlConnection connection, NpgsqlTransaction transaction, long qrCodeId, bool requireCabinet)
+    {
+        long? cabinetId;
+        using (var command = new NpgsqlCommand(
+            "SELECT id FROM cabinet_profiles WHERE qr_code_id = @qrCodeId", connection, transaction))
+        {
+            command.Parameters.AddWithValue("qrCodeId", qrCodeId);
+            var result = command.ExecuteScalar();
+            cabinetId = result is null ? null : Convert.ToInt64(result);
+        }
+
+        if (requireCabinet && cabinetId is null)
+            return null;
+
+        var cabinetRunFilter = cabinetId.HasValue ? " OR run.cabinet_id = @cabinetId" : string.Empty;
+        int deletedRunItems;
+        using (var command = new NpgsqlCommand($@"
+            DELETE FROM inventory_run_items item
+            USING inventory_runs run
+            WHERE item.inventory_run_id = run.id
+              AND (run.qr_code_id = @qrCodeId{cabinetRunFilter})
+        ", connection, transaction))
+        {
+            command.Parameters.AddWithValue("qrCodeId", qrCodeId);
+            if (cabinetId.HasValue)
+                command.Parameters.AddWithValue("cabinetId", cabinetId.Value);
+            deletedRunItems = command.ExecuteNonQuery();
+        }
+
+        var cabinetDeleteFilter = cabinetId.HasValue ? " OR cabinet_id = @cabinetId" : string.Empty;
+        int deletedRuns;
+        using (var command = new NpgsqlCommand(
+            $"DELETE FROM inventory_runs WHERE qr_code_id = @qrCodeId{cabinetDeleteFilter}", connection, transaction))
+        {
+            command.Parameters.AddWithValue("qrCodeId", qrCodeId);
+            if (cabinetId.HasValue)
+                command.Parameters.AddWithValue("cabinetId", cabinetId.Value);
+            deletedRuns = command.ExecuteNonQuery();
+        }
+
+        int deletedChecklistItems = 0;
+        int deletedPhotos = 0;
+        int deletedEvents = 0;
+        if (cabinetId.HasValue)
+        {
+            using (var command = new NpgsqlCommand(
+                "DELETE FROM cabinet_checklist_items WHERE cabinet_id = @cabinetId", connection, transaction))
+            {
+                command.Parameters.AddWithValue("cabinetId", cabinetId.Value);
+                deletedChecklistItems = command.ExecuteNonQuery();
+            }
+
+            using (var command = new NpgsqlCommand(
+                "DELETE FROM cabinet_photos WHERE cabinet_id = @cabinetId", connection, transaction))
+            {
+                command.Parameters.AddWithValue("cabinetId", cabinetId.Value);
+                deletedPhotos = command.ExecuteNonQuery();
+            }
+
+            using (var command = new NpgsqlCommand(
+                "DELETE FROM inventory_sessions WHERE qr_code_id = @qrCodeId", connection, transaction))
+            {
+                command.Parameters.AddWithValue("qrCodeId", qrCodeId);
+                deletedEvents = command.ExecuteNonQuery();
+            }
+
+            using var deleteCabinet = new NpgsqlCommand(
+                "DELETE FROM cabinet_profiles WHERE id = @cabinetId", connection, transaction);
+            deleteCabinet.Parameters.AddWithValue("cabinetId", cabinetId.Value);
+            deleteCabinet.ExecuteNonQuery();
+        }
+
+        return (cabinetId, deletedRunItems, deletedRuns, deletedChecklistItems, deletedPhotos, deletedEvents);
     }
 
     private static SaveRunResult SaveRun(NpgsqlConnection connection, InventoryRunSyncItem run)

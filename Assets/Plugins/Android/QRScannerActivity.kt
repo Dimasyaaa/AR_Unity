@@ -2,9 +2,22 @@ package com.unity.template.ar_mobile
 
 import android.Manifest
 import android.content.pm.PackageManager
+import android.graphics.Canvas
+import android.graphics.Color
+import android.graphics.Paint
+import android.graphics.PorterDuff
+import android.graphics.PorterDuffXfermode
+import android.graphics.RectF
+import android.graphics.Typeface
+import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
 import android.util.Size
+import android.view.Gravity
+import android.view.View
 import android.view.ViewGroup
+import android.widget.FrameLayout
+import android.widget.TextView
+import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.AppCompatActivity
 import androidx.camera.core.*
 import androidx.camera.lifecycle.ProcessCameraProvider
@@ -18,22 +31,22 @@ import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
 class QRScannerActivity : AppCompatActivity() {
-    // ВАЖНО: Вынесли в поле класса, чтобы было доступно в processImage и onRequestPermissionsResult
     private lateinit var previewView: PreviewView
     private lateinit var cameraExecutor: ExecutorService
-    private var isScanning = true
+    @Volatile private var isScanning = true
+    private var resultSent = false
 
     companion object {
         private const val REQUEST_CODE_PERMISSIONS = 10
         private val REQUIRED_PERMISSIONS = arrayOf(Manifest.permission.CAMERA)
         private const val UNITY_OBJECT = "QRManager"
         private const val UNITY_METHOD = "OnNativeQRScanned"
+        private const val COLOR_CYAN = 0xFF35D7F2.toInt()
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        
-        // Инициализируем поле класса
+
         previewView = PreviewView(this).apply {
             layoutParams = ViewGroup.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
@@ -41,10 +54,86 @@ class QRScannerActivity : AppCompatActivity() {
             )
             scaleType = PreviewView.ScaleType.FILL_CENTER
         }
-        setContentView(previewView)
-        
+
+        val root = FrameLayout(this)
+        root.setBackgroundColor(Color.BLACK)
+        root.addView(previewView)
+
+        val guide = ScanFrameView(this)
+        root.addView(guide, FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.MATCH_PARENT
+        ))
+
+        val backButton = TextView(this).apply {
+            text = "‹  Назад"
+            textSize = 16f
+            setTextColor(Color.WHITE)
+            gravity = Gravity.CENTER
+            contentDescription = "Закрыть сканер и вернуться в приложение"
+            background = roundedBackground(0xCC102235.toInt(), dp(22).toFloat())
+            setPadding(dp(18), dp(10), dp(18), dp(10))
+            setOnClickListener { finishWithResult("CANCELLED") }
+        }
+        val backParams = FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT,
+            dp(48),
+            Gravity.TOP or Gravity.START
+        ).apply { setMargins(dp(20), dp(22), dp(20), 0) }
+        root.addView(backButton, backParams)
+
+        val title = TextView(this).apply {
+            text = "Сканирование QR-кода"
+            textSize = 23f
+            typeface = Typeface.create("sans-serif", Typeface.BOLD)
+            setTextColor(Color.WHITE)
+            gravity = Gravity.CENTER
+            setShadowLayer(8f, 0f, 2f, Color.BLACK)
+        }
+        val titleParams = FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT,
+            Gravity.TOP or Gravity.CENTER_HORIZONTAL
+        ).apply { setMargins(dp(24), dp(90), dp(24), 0) }
+        root.addView(title, titleParams)
+
+        val subtitle = TextView(this).apply {
+            text = "Наведите рамку на QR-код шкафа"
+            textSize = 16f
+            setTextColor(0xFFEAF8FF.toInt())
+            gravity = Gravity.CENTER
+            setShadowLayer(6f, 0f, 2f, Color.BLACK)
+        }
+        val subtitleParams = FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT,
+            Gravity.TOP or Gravity.CENTER_HORIZONTAL
+        ).apply { setMargins(dp(28), dp(130), dp(28), 0) }
+        root.addView(subtitle, subtitleParams)
+
+        val hint = TextView(this).apply {
+            text = "Код распознается автоматически\nДержите его внутри рамки"
+            textSize = 16f
+            setTextColor(Color.WHITE)
+            gravity = Gravity.CENTER
+            background = roundedBackground(0xCC102235.toInt(), dp(18).toFloat())
+            setPadding(dp(22), dp(14), dp(22), dp(14))
+        }
+        val hintParams = FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT,
+            Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
+        ).apply { setMargins(dp(24), 0, dp(24), dp(54)) }
+        root.addView(hint, hintParams)
+
+        setContentView(root)
         cameraExecutor = Executors.newSingleThreadExecutor()
-        
+        onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() {
+                finishWithResult("CANCELLED")
+            }
+        })
+
         if (allPermissionsGranted()) {
             startCamera()
         } else {
@@ -57,53 +146,63 @@ class QRScannerActivity : AppCompatActivity() {
         cameraProviderFuture.addListener({
             try {
                 val cameraProvider = cameraProviderFuture.get()
-                val preview = Preview.Builder().build().also { 
-                    it.setSurfaceProvider(previewView.surfaceProvider) 
+                val preview = Preview.Builder().build().also {
+                    it.setSurfaceProvider(previewView.surfaceProvider)
                 }
-                
+
                 val imageAnalysis = ImageAnalysis.Builder()
                     .setTargetResolution(Size(1280, 720))
                     .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                     .build()
-                    .also { 
+                    .also {
                         it.setAnalyzer(cameraExecutor) { imageProxy ->
-                            if (!isScanning) { 
+                            if (!isScanning) {
                                 imageProxy.close()
-                                return@setAnalyzer 
+                                return@setAnalyzer
                             }
                             processImage(imageProxy)
                         }
                     }
-                    
+
                 cameraProvider.unbindAll()
-                cameraProvider.bindToLifecycle(this, CameraSelector.DEFAULT_BACK_CAMERA, preview, imageAnalysis)
-            } catch (e: Exception) { 
-                sendToUnity("ERROR:${e.message}") 
+                cameraProvider.bindToLifecycle(
+                    this,
+                    CameraSelector.DEFAULT_BACK_CAMERA,
+                    preview,
+                    imageAnalysis
+                )
+            } catch (e: Exception) {
+                finishWithResult("ERROR:${e.message}")
             }
         }, ContextCompat.getMainExecutor(this))
     }
 
     private fun processImage(imageProxy: ImageProxy) {
-        val mediaImage = imageProxy.image ?: run { 
+        val mediaImage = imageProxy.image ?: run {
             imageProxy.close()
-            return 
+            return
         }
-        
+
         val image = InputImage.fromMediaImage(mediaImage, imageProxy.imageInfo.rotationDegrees)
-        
         BarcodeScanning.getClient().process(image)
             .addOnSuccessListener { barcodes ->
-                for (barcode in barcodes) {
-                    barcode.rawValue?.let { value ->
-                        isScanning = false
-                        sendToUnity(value)
-                        // Теперь ошибок не будет, previewView доступна
-                        previewView.postDelayed({ finish() }, 300)
-                        return@addOnSuccessListener
-                    }
+                val value = barcodes.firstNotNullOfOrNull { it.rawValue }
+                if (value != null && isScanning) {
+                    finishWithResult(value)
                 }
             }
+            .addOnFailureListener { error ->
+                android.util.Log.w("QRScanner", "QR recognition failed", error)
+            }
             .addOnCompleteListener { imageProxy.close() }
+    }
+
+    private fun finishWithResult(message: String) {
+        if (resultSent) return
+        resultSent = true
+        isScanning = false
+        sendToUnity(message)
+        runOnUiThread { finish() }
     }
 
     private fun sendToUnity(message: String) {
@@ -114,20 +213,85 @@ class QRScannerActivity : AppCompatActivity() {
         ContextCompat.checkSelfPermission(baseContext, it) == PackageManager.PERMISSION_GRANTED
     }
 
-    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<String>, grantResults: IntArray) {
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<String>,
+        grantResults: IntArray
+    ) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (requestCode == REQUEST_CODE_PERMISSIONS) {
-            if (allPermissionsGranted()) {
-                startCamera() // Просто запускаем камеру на уже созданном previewView
-            } else { 
-                sendToUnity("ERROR:Camera permission denied")
-                finish() 
-            }
+            if (allPermissionsGranted()) startCamera()
+            else finishWithResult("ERROR:Camera permission denied")
         }
     }
 
-    override fun onDestroy() { 
+    override fun onDestroy() {
         super.onDestroy()
-        cameraExecutor.shutdown() 
+        if (::cameraExecutor.isInitialized) cameraExecutor.shutdown()
+    }
+
+    private fun roundedBackground(color: Int, radius: Float) = GradientDrawable().apply {
+        setColor(color)
+        cornerRadius = radius
+        setStroke(dp(1), 0x884CE4FF.toInt())
+    }
+
+    private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
+
+    private class ScanFrameView(context: android.content.Context) : View(context) {
+        private val dimPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = 0x99000000.toInt()
+        }
+        private val clearPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            xfermode = PorterDuffXfermode(PorterDuff.Mode.CLEAR)
+        }
+        private val glowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = COLOR_CYAN
+            style = Paint.Style.STROKE
+            strokeWidth = dp(7).toFloat()
+            strokeCap = Paint.Cap.ROUND
+            strokeJoin = Paint.Join.ROUND
+            setShadowLayer(dp(12).toFloat(), 0f, 0f, COLOR_CYAN)
+        }
+        private val linePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.WHITE
+            style = Paint.Style.STROKE
+            strokeWidth = dp(3).toFloat()
+            strokeCap = Paint.Cap.ROUND
+            strokeJoin = Paint.Join.ROUND
+        }
+
+        init {
+            setLayerType(LAYER_TYPE_SOFTWARE, null)
+            isClickable = false
+        }
+
+        override fun onDraw(canvas: Canvas) {
+            super.onDraw(canvas)
+            canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), dimPaint)
+
+            val size = minOf(width * 0.76f, height * 0.34f)
+            val centerY = height * 0.49f
+            val frame = RectF(
+                (width - size) / 2f,
+                centerY - size / 2f,
+                (width + size) / 2f,
+                centerY + size / 2f
+            )
+            canvas.drawRoundRect(frame, dp(22).toFloat(), dp(22).toFloat(), clearPaint)
+
+            val corner = size * 0.17f
+            canvas.drawRoundRect(frame, dp(22).toFloat(), dp(22).toFloat(), glowPaint)
+            canvas.drawLine(frame.left, frame.top + corner, frame.left, frame.top, linePaint)
+            canvas.drawLine(frame.left, frame.top, frame.left + corner, frame.top, linePaint)
+            canvas.drawLine(frame.right - corner, frame.top, frame.right, frame.top, linePaint)
+            canvas.drawLine(frame.right, frame.top, frame.right, frame.top + corner, linePaint)
+            canvas.drawLine(frame.left, frame.bottom - corner, frame.left, frame.bottom, linePaint)
+            canvas.drawLine(frame.left, frame.bottom, frame.left + corner, frame.bottom, linePaint)
+            canvas.drawLine(frame.right - corner, frame.bottom, frame.right, frame.bottom, linePaint)
+            canvas.drawLine(frame.right, frame.bottom - corner, frame.right, frame.bottom, linePaint)
+        }
+
+        private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
     }
 }

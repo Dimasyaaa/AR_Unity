@@ -8,6 +8,7 @@ using Gree.UnityWebView;
 public class WebOverlayController : MonoBehaviour
 {
     public static WebOverlayController Instance { get; private set; }
+    public bool IsOpen => webViewObject != null || uiCanvas != null;
 
     private WebViewObject webViewObject;
     private GameObject webViewTrigger;
@@ -240,6 +241,21 @@ public class WebOverlayController : MonoBehaviour
     private void OnMoveDown() { if (marginBottom > 0) { marginTop += moveStep; marginBottom -= moveStep; UpdateMargins(); } }
     private void OnZoomIn() { if (currentZoom < maxZoom) { currentZoom = Mathf.Min(maxZoom, currentZoom + zoomStep); ApplyZoom(); } }
     private void OnZoomOut() { if (currentZoom > minZoom) { currentZoom = Mathf.Max(minZoom, currentZoom - zoomStep); ApplyZoom(); } }
+
+    public void ZoomIn() => OnZoomIn();
+    public void ZoomOut() => OnZoomOut();
+    public void MoveLeft() => OnMoveLeft();
+    public void MoveRight() => OnMoveRight();
+    public void MoveUp() => OnMoveUp();
+    public void MoveDown() => OnMoveDown();
+
+    public void ResetZoom()
+    {
+        if (!IsOpen) return;
+        currentZoom = 1.0f;
+        CalculateMargins();
+        UpdateMargins();
+    }
 
     private void ApplyZoom()
     {

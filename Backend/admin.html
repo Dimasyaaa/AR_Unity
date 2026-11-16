@@ -4,7 +4,7 @@
 		<meta charset="UTF-8">
 			<meta name="viewport" content="width=device-width, initial-scale=1.0">
 				<title>AR Inventory -- Админка</title>
-				<link rel="stylesheet" href="style.css?v=inventory-2">
+				<link rel="stylesheet" href="style.css?v=inventory-3">
 </head>
 	<body>
 		<div class="container">
@@ -75,8 +75,18 @@
 
 			<div class="panel" id="panel-sessions" style="display:none;">
 				<div class="panel-header">
-					<h2>Журнал событий (последние 500)</h2>
+					<div><h2>Журнал событий (последние 500)</h2><p class="hint">Новые записи появляются автоматически, пока эта вкладка открыта.</p></div>
 					<div class="header-controls">
+						<select id="sessions-action-filter" class="search" aria-label="Фильтр журнала по действию">
+							<option value="all">Все действия</option>
+							<option value="inventory">Инвентаризация</option>
+							<option value="scan">Сканирование QR</option>
+							<option value="login">Вход</option>
+							<option value="logout">Выход</option>
+							<option value="calc">Расчёт</option>
+							<option value="error">Ошибки</option>
+						</select>
+						<input type="text" id="sessions-search" class="search" placeholder="Пользователь, QR-код или комментарий…">
 						<button class="btn btn-secondary" onclick="loadSessions()">Обновить</button>
 						<button id="clear-sessions-btn" class="btn btn-danger" onclick="clearAllSessions()" disabled="">
 							Очистить журнал
@@ -120,9 +130,15 @@
 
 			<div class="panel" id="panel-runs" style="display:none;">
 				<div class="panel-header">
-					<div><h2>Результаты инвентаризации</h2><p class="hint">Здесь видны отметки «Есть» и «Нет», отправленные сотрудниками с AR-карточки.</p></div>
+					<div><h2>Результаты инвентаризации</h2><p class="hint">Проверки можно сгруппировать по шкафу, сотруднику или дате; состав каждой проверки доступен по кнопке «Подробнее».</p></div>
 					<div class="header-controls">
 						<input type="text" class="search" id="search-runs" placeholder="Сотрудник, шкаф или QR-код…">
+						<select class="search" id="group-runs-by" aria-label="Группировка проверок">
+							<option value="cabinet">Группировать по шкафу</option>
+							<option value="date">Группировать по дате</option>
+							<option value="user">Группировать по сотруднику</option>
+							<option value="none">Без группировки</option>
+						</select>
 						<button class="btn btn-secondary" onclick="loadInventoryRuns()">Обновить</button>
 					</div>
 				</div>
@@ -208,6 +224,8 @@
 				<div class="form-group">
 					<label>Чек-лист — один предмет на строку</label>
 					<textarea id="inventory-items" rows="10" placeholder="Ключ гаечный 13 мм&#10;Перчатки защитные&#10;Переносной фонарь"></textarea>
+					<div class="hint">Нумерация соответствует порядку строк. Она будет видна в результате каждой проверки.</div>
+					<ol id="inventory-items-preview" class="checklist-preview" aria-live="polite"></ol>
 					<div class="hint">После сохранения приложение получит обновлённый список при экспорте базы в SQLite.</div>
 				</div>
 				<div class="modal-actions">
@@ -232,13 +250,13 @@
 			<div class="modal modal-wide">
 				<div class="modal-title-row"><div><span class="eyebrow">ПРОВЕРКА ШКАФА</span><h3 id="inventory-run-title">Результат инвентаризации</h3></div><button class="icon-button" onclick="closeModal('modal-inventory-run')" aria-label="Закрыть">×</button></div>
 				<div id="inventory-run-meta" class="run-meta"></div>
-				<div class="table-wrap"><table class="run-items-table"><thead><tr><th>Предмет</th><th>Отметка сотрудника</th><th>Комментарий</th></tr></thead><tbody id="inventory-run-items"></tbody></table></div>
+				<div class="table-wrap"><table class="run-items-table"><thead><tr><th>№</th><th>Предмет</th><th>Отметка сотрудника</th><th>Комментарий</th></tr></thead><tbody id="inventory-run-items"></tbody></table></div>
 				<div class="modal-actions"><button class="btn btn-secondary" onclick="closeModal('modal-inventory-run')">Закрыть</button></div>
 			</div>
 		</div>
 
 		<div class="toast" id="toast"></div>
 
-		<script src="main.js?v=inventory-2"></script>
+		<script src="main.js?v=inventory-3"></script>
 	</body>
 </html>

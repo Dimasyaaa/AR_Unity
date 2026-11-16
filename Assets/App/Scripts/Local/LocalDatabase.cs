@@ -92,7 +92,7 @@ namespace ArInventory.Local
                 return;
             }
 
-            // Экспорт изменился — обновляем справочники, сохраняя сессии
+            // Экспорт изменился — обновляем справочники, сохраняя локальную историю.
             try
             {
                 RefreshReferenceData(sourcePath);
@@ -107,18 +107,21 @@ namespace ArInventory.Local
             Debug.Log("[DB] Reference data refreshed from new export");
         }
 
-        // Заменяет users и qr_codes данными из нового экспорта, сессии не трогает
+        // Обновляет справочники из экспорта, не затрагивая локальные сессии и проверки.
         private void RefreshReferenceData(string sourcePath)
         {
             bool hasCabinetTables;
+            bool hasCabinetPhotoTable;
             using (var source = new SQLiteConnection(sourcePath))
             {
                 hasCabinetTables = source.GetTableInfo("cabinet_profiles").Count > 0 &&
                                    source.GetTableInfo("cabinet_checklist_items").Count > 0;
+                hasCabinetPhotoTable = source.GetTableInfo("cabinet_photos").Count > 0;
             }
 
             using (var conn = new SQLiteConnection(DatabasePath))
             {
+                conn.CreateTable<LocalCabinetPhoto>();
                 conn.Execute("ATTACH DATABASE ? AS newdb", sourcePath);
                 conn.Execute("DELETE FROM users");
                 conn.Execute("INSERT INTO users SELECT * FROM newdb.users");
@@ -129,6 +132,9 @@ namespace ArInventory.Local
                     conn.Execute("INSERT INTO cabinet_profiles SELECT * FROM newdb.cabinet_profiles");
                     conn.Execute("INSERT INTO cabinet_checklist_items SELECT * FROM newdb.cabinet_checklist_items");
                 }
+                conn.Execute("DELETE FROM cabinet_photos");
+                if (hasCabinetPhotoTable)
+                    conn.Execute("INSERT INTO cabinet_photos SELECT * FROM newdb.cabinet_photos");
                 conn.Execute("DELETE FROM qr_codes");
                 conn.Execute("INSERT INTO qr_codes SELECT * FROM newdb.qr_codes");
                 conn.Execute("DETACH DATABASE newdb");
@@ -160,6 +166,7 @@ namespace ArInventory.Local
 
             db.CreateTable<LocalInventorySession>();
             db.CreateTable<LocalCabinetProfile>();
+            db.CreateTable<LocalCabinetPhoto>();
             db.CreateTable<LocalCabinetChecklistItem>();
             db.CreateTable<LocalInventoryRun>();
             db.CreateTable<LocalInventoryRunItem>();
@@ -172,8 +179,10 @@ namespace ArInventory.Local
 
             long usersCount = db.Table<LocalUser>().Count();
             long qrCount = db.Table<LocalQrCode>().Count();
+            long cabinetCount = db.Table<LocalCabinetProfile>().Count();
+            long checklistCount = db.Table<LocalCabinetChecklistItem>().Count();
 
-            Debug.Log($"[DB] Ready. Users: {usersCount}, QR: {qrCount}");
+            Debug.Log($"[DB] Ready. Users: {usersCount}, QR: {qrCount}, cabinets: {cabinetCount}, checklist items: {checklistCount}");
             OnDatabaseReady?.Invoke();
         }
 
@@ -200,6 +209,16 @@ namespace ArInventory.Local
                 .Where(item => item.cabinet_id == cabinetId && item.is_active)
                 .OrderBy(item => item.sort_order)
                 .ThenBy(item => item.id)
+                .ToList();
+        }
+
+        public List<LocalCabinetPhoto> GetCabinetPhotos(long cabinetId)
+        {
+            if (!IsReady) return new List<LocalCabinetPhoto>();
+            return db.Table<LocalCabinetPhoto>()
+                .ToList()
+                .Where(photo => photo.cabinet_id == cabinetId)
+                .OrderBy(photo => photo.page_number)
                 .ToList();
         }
 

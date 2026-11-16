@@ -40,6 +40,15 @@ public class MainMenuManager : MonoBehaviour
             instructionsPanel.SetActive(false);
     }
 
+    private void OnDestroy()
+    {
+        if (QRScanner.Instance != null)
+        {
+            QRScanner.Instance.OnQRScanned -= OnQRScanned;
+            QRScanner.Instance.OnScanCancelled -= OnScanCancelled;
+        }
+    }
+
     private void OnScanClicked()
     {
         Debug.Log("[Menu] Starting QR scan...");
@@ -48,6 +57,7 @@ public class MainMenuManager : MonoBehaviour
         {
             // Подписываемся на событие сканирования и запускаем процесс
             QRScanner.Instance.OnQRScanned += OnQRScanned;
+            QRScanner.Instance.OnScanCancelled += OnScanCancelled;
             QRScanner.Instance.StartScanning();
         }
     }
@@ -62,7 +72,10 @@ public class MainMenuManager : MonoBehaviour
 
         // Отписываемся от события, чтобы избежать дублирования вызовов
         if (QRScanner.Instance != null)
+        {
             QRScanner.Instance.OnQRScanned -= OnQRScanned;
+            QRScanner.Instance.OnScanCancelled -= OnScanCancelled;
+        }
 
         // Сохраняем событие сканирования в локальную базу.
         if (LocalClient.Instance != null && SessionManager.IsLoggedIn)
@@ -81,6 +94,15 @@ public class MainMenuManager : MonoBehaviour
 
         // Загружаем основную AR-сцену
         SceneManager.LoadScene("SampleScene");
+    }
+
+    private void OnScanCancelled()
+    {
+        if (QRScanner.Instance != null)
+        {
+            QRScanner.Instance.OnQRScanned -= OnQRScanned;
+            QRScanner.Instance.OnScanCancelled -= OnScanCancelled;
+        }
     }
 
     private void OnInstructionsClicked()

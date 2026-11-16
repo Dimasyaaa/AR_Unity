@@ -44,6 +44,15 @@ namespace ArInventory.Local
             if (LocalDatabase.Instance == null || !LocalDatabase.Instance.IsReady)
             { onDone?.Invoke("База не готова"); yield break; }
 
+            baseUrl = string.IsNullOrWhiteSpace(baseUrl) ? InventoryApiDefaultUrl() : baseUrl.Trim().TrimEnd('/');
+            if (Application.platform == RuntimePlatform.Android &&
+                Uri.TryCreate(baseUrl, UriKind.Absolute, out var selectedUri) && selectedUri.IsLoopback)
+            {
+                Debug.LogWarning($"[Sync] USB-адрес {baseUrl} указывает на телефон. Для синхронизации использую Wi-Fi: {WIFI_URL}");
+                baseUrl = WIFI_URL;
+            }
+            Debug.Log($"[Sync] Синхронизация через {baseUrl}");
+
             var unsynced = LocalDatabase.Instance.Connection
                 .Table<LocalInventorySession>()
                 .Where(s => !s.synced)
@@ -89,11 +98,13 @@ namespace ArInventory.Local
                             LocalDatabase.Instance.Connection.Update(s);
                         }
                         var res = JsonUtility.FromJson<SyncResult>(req.downloadHandler.text);
-                        sessionSummary = $"Журнал: импортировано {res.imported}, пропущено {res.skipped}";
+                        sessionSummary = res != null
+                            ? $"Журнал: импортировано {res.imported}, пропущено {res.skipped}"
+                            : "Журнал: сервер ответил, но вернул некорректный результат";
                     }
                     else
                     {
-                        onDone?.Invoke("Ошибка синхронизации журнала: " + req.error);
+                        onDone?.Invoke($"Ошибка синхронизации журнала: {FormatRequestError(req, baseUrl)}");
                         yield break;
                     }
                 }
@@ -103,48 +114,172 @@ namespace ArInventory.Local
                 .Where(run => !run.synced).ToList();
             if (pendingRuns.Count == 0) { onDone?.Invoke(sessionSummary); yield break; }
 
-            var runPayload = new InventoryRunsSyncPayload();
-            runPayload.items = pendingRuns.Select(run => new InventoryRunSyncDto
+            int importedRuns = 0;
+            int duplicateRuns = 0;
+            int rejectedRuns = 0;
+            string firstRejection = null;
+
+            // Send records one by one. One obsolete local check (for example, a QR code
+            // removed from the current reference database) must not prevent valid checks
+            // from reaching the server.
+            foreach (var run in pendingRuns)
+            {
+                if (!TryBuildRunDto(run, out var runDto, out var validationError))
+                {
+                    rejectedRuns++;
+                    if (string.IsNullOrEmpty(firstRejection)) firstRejection = validationError;
+                    continue;
+                }
+
+                var runPayload = new InventoryRunsSyncPayload
+                {
+                    items = new List<InventoryRunSyncDto> { runDto }
+                };
+
+                using (var req = new UnityWebRequest(baseUrl + "/api/sync/inventory-runs", "POST"))
+                {
+                    req.SetRequestHeader("Content-Type", "application/json; charset=utf-8");
+                    req.downloadHandler = new DownloadHandlerBuffer();
+                    req.uploadHandler = new UploadHandlerRaw(Encoding.UTF8.GetBytes(JsonUtility.ToJson(runPayload)));
+                    req.timeout = 10;
+                    yield return req.SendWebRequest();
+                    if (req.result != UnityWebRequest.Result.Success)
+                    {
+                        onDone?.Invoke($"{sessionSummary}. Инвентаризация: {FormatRequestError(req, baseUrl)}");
+                        yield break;
+                    }
+
+                    var result = JsonUtility.FromJson<InventoryRunsSyncResult>(req.downloadHandler.text);
+                    if (result == null || result.skipped > 0 || result.imported + result.duplicates != 1)
+                    {
+                        rejectedRuns++;
+                        string detail = result != null && result.errors != null && result.errors.Count > 0
+                            ? result.errors[0]
+                            : "Сервер не подтвердил сохранение проверки.";
+                        if (string.IsNullOrEmpty(firstRejection)) firstRejection = detail;
+                        continue;
+                    }
+
+                    run.synced = true;
+                    LocalDatabase.Instance.Connection.Update(run);
+                    importedRuns += result.imported;
+                    duplicateRuns += result.duplicates;
+                }
+            }
+
+            string inventorySummary = $"Инвентаризация: отправлено {importedRuns}, уже было {duplicateRuns}";
+            if (rejectedRuns > 0)
+                inventorySummary += $", оставлено на устройстве {rejectedRuns}. Причина: {firstRejection}";
+            onDone?.Invoke($"{sessionSummary}. {inventorySummary}");
+        }
+
+        private static bool TryBuildRunDto(LocalInventoryRun run, out InventoryRunSyncDto dto, out string error)
+        {
+            dto = null;
+            error = null;
+            var database = LocalDatabase.Instance;
+            if (database == null || !database.IsReady)
+            {
+                error = "Локальная база не готова.";
+                return false;
+            }
+
+            if (!Guid.TryParse(run.client_run_id, out _))
+            {
+                error = "У локальной проверки повреждён идентификатор.";
+                return false;
+            }
+
+            if (database.Connection.Table<LocalUser>().FirstOrDefault(user => user.id == run.user_id) == null)
+            {
+                error = "Сотрудник старой проверки отсутствует в актуальной локальной базе.";
+                return false;
+            }
+
+            var cabinet = database.FindCabinetByQr(run.qr_code);
+            if (cabinet == null)
+            {
+                error = "Старая проверка сохранена для QR-кода, который больше не привязан к шкафу. Она оставлена на устройстве.";
+                return false;
+            }
+
+            var checklist = database.GetCabinetChecklist(cabinet.id);
+            var savedItems = database.Connection.Table<LocalInventoryRunItem>()
+                .Where(item => item.run_id == run.id).ToList();
+            if (savedItems.Count == 0 || savedItems.Count != checklist.Count)
+            {
+                error = "Список предметов старой проверки отличается от текущего чек-листа. Она оставлена на устройстве.";
+                return false;
+            }
+
+            var syncItems = new List<InventoryRunItemSyncDto>(savedItems.Count);
+            var mappedIds = new HashSet<long>();
+            bool referencesChanged = run.cabinet_id != cabinet.id || run.qr_code_id != cabinet.qr_code_id;
+            foreach (var savedItem in savedItems)
+            {
+                var currentItem = checklist.FirstOrDefault(item => item.id == savedItem.checklist_item_id);
+                if (currentItem == null && !string.IsNullOrWhiteSpace(savedItem.item_name_snapshot))
+                    currentItem = checklist.FirstOrDefault(item =>
+                        !string.IsNullOrWhiteSpace(item.item_name) && string.Equals(
+                            item.item_name.Trim(), savedItem.item_name_snapshot.Trim(), StringComparison.OrdinalIgnoreCase));
+
+                if (currentItem == null || !mappedIds.Add(currentItem.id))
+                {
+                    error = "Не удалось сопоставить предмет старой проверки с текущим чек-листом. Она оставлена на устройстве.";
+                    return false;
+                }
+                if (savedItem.status != "present" && savedItem.status != "missing")
+                {
+                    error = "В старой проверке есть предмет без отметки. Она оставлена на устройстве.";
+                    return false;
+                }
+
+                if (savedItem.checklist_item_id != currentItem.id)
+                {
+                    savedItem.checklist_item_id = currentItem.id;
+                    database.Connection.Update(savedItem);
+                    referencesChanged = true;
+                }
+
+                syncItems.Add(new InventoryRunItemSyncDto
+                {
+                    itemId = currentItem.id,
+                    status = savedItem.status,
+                    comment = savedItem.comment ?? string.Empty
+                });
+            }
+
+            if (referencesChanged)
+            {
+                run.cabinet_id = cabinet.id;
+                run.qr_code_id = cabinet.qr_code_id;
+                database.Connection.Update(run);
+            }
+
+            dto = new InventoryRunSyncDto
             {
                 clientRunId = run.client_run_id,
                 userId = run.user_id,
                 qrCode = run.qr_code,
                 startedAt = run.started_at,
                 completedAt = run.completed_at,
-                items = LocalDatabase.Instance.Connection.Table<LocalInventoryRunItem>()
-                    .Where(item => item.run_id == run.id)
-                    .ToList()
-                    .Select(item => new InventoryRunItemSyncDto
-                    {
-                        itemId = item.checklist_item_id,
-                        status = item.status,
-                        comment = item.comment ?? ""
-                    }).ToList()
-            }).ToList();
+                items = syncItems
+            };
+            return true;
+        }
 
-            using (var req = new UnityWebRequest(baseUrl + "/api/sync/inventory-runs", "POST"))
-            {
-                req.SetRequestHeader("Content-Type", "application/json");
-                req.downloadHandler = new DownloadHandlerBuffer();
-                req.uploadHandler = new UploadHandlerRaw(Encoding.UTF8.GetBytes(JsonUtility.ToJson(runPayload)));
-                req.timeout = 10;
-                yield return req.SendWebRequest();
-                if (req.result != UnityWebRequest.Result.Success)
-                { onDone?.Invoke("" + sessionSummary + ". Инвентаризация: " + req.error); yield break; }
+        private static string FormatRequestError(UnityWebRequest request, string baseUrl)
+        {
+            var detail = request.downloadHandler != null ? request.downloadHandler.text : string.Empty;
+            if (detail != null && detail.Length > 300) detail = detail.Substring(0, 300);
+            string result = request.responseCode > 0 ? $"HTTP {request.responseCode}: {request.error}" : request.error;
+            if (!string.IsNullOrWhiteSpace(detail)) result += $" — {detail}";
+            return $"{result} (API: {baseUrl})";
+        }
 
-                var result = JsonUtility.FromJson<InventoryRunsSyncResult>(req.downloadHandler.text);
-                if (result == null || result.skipped > 0 || result.imported + result.duplicates != pendingRuns.Count)
-                {
-                    string detail = result != null && result.errors != null && result.errors.Count > 0
-                        ? " " + result.errors[0]
-                        : (result != null ? $" Пропущено: {result.skipped}." : string.Empty);
-                    onDone?.Invoke($"{sessionSummary}. Сервер не принял все проверки.{detail} Исправьте данные и повторите синхронизацию.");
-                    yield break;
-                }
-                foreach (var run in pendingRuns)
-                { run.synced = true; LocalDatabase.Instance.Connection.Update(run); }
-                onDone?.Invoke($"{sessionSummary}. Инвентаризация: отправлено {result.imported}, уже было {result.duplicates}, пропущено {result.skipped}");
-            }
+        private static string InventoryApiDefaultUrl()
+        {
+            return Application.isEditor ? USB_URL : WIFI_URL;
         }
     }
 

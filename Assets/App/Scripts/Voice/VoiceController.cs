@@ -49,15 +49,18 @@ public class VoiceController : MonoBehaviour
         }
 
         // 2) перезапуск прослушивания с небольшой паузой
-        if (restartInFrames > 0)
+        bool restartNow = false;
+        lock (queueLock)
         {
-            restartInFrames--;
+            if (restartInFrames > 0)
+                restartInFrames--;
+            else if (restartInFrames == 0)
+            {
+                restartInFrames = -1;
+                restartNow = true;
+            }
         }
-        else if (restartInFrames == 0)
-        {
-            restartInFrames = -1;
-            RunOnUI(StartListening);
-        }
+        if (restartNow) RunOnUI(StartListening);
     }
 
     private void RequestMicAndInit()
@@ -120,16 +123,24 @@ public class VoiceController : MonoBehaviour
     {
         if (!string.IsNullOrEmpty(text))
         {
-            Debug.Log($"[Voice] Слышу: {text}");
-            lock (queueLock) pendingTexts.Enqueue(text);
+            lock (queueLock)
+            {
+                pendingTexts.Enqueue(text);
+                restartInFrames = 20; // пауза ~0.3 c перед следующим прослушиванием
+            }
         }
-        restartInFrames = 20; // пауза ~0.3 c перед следующим прослушиванием
+        else
+        {
+            lock (queueLock)
+                restartInFrames = 20;
+        }
     }
 
     public void HandleError(int code)
     {
         Debug.LogWarning($"[Voice] Ошибка распознавателя {code}, перезапуск");
-        restartInFrames = 30;
+        lock (queueLock)
+            restartInFrames = 30;
     }
 
     public void ExtractAndHandle(AndroidJavaObject bundle)

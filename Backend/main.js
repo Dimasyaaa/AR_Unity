@@ -291,62 +291,96 @@ async function saveQr() {
 }
 
 async function deleteQr(id) {
-  if (!confirm('Удалить QR-код? Связанные сессии сохранятся, но поле qr_code_id станет NULL.')) return;
-  const res = await fetch(`${API}/api/admin/qr/${id}`, { method: 'DELETE' });
-  const data = await res.json();
-  if (!res.ok) return toast(data.message || 'Ошибка', 'error');
-  toast(data.message);
-  loadQr();
-}
-
-// SESSIONS
-async function loadSessions() {
+  if (!confirm('Удалить QR-код? Если он привязан к шкафу, вместе с ним будут удалены шкаф, фотографии, чек-лист и вся история инвентаризаций. У обычного QR события журнала сохранятся без связи с кодом. Действие необратимо.')) return;
   try {
-    const res = await fetch(`${API}/api/admin/sessions`);
+    const res = await fetch(`${API}/api/admin/qr/${id}`, { method: 'DELETE' });
     const data = await res.json();
-    const tbody = document.getElementById('sessions-body');
-
-    // Обновляем состояние кнопки очистки
-    const clearBtn = document.getElementById('clear-sessions-btn');
-    if (clearBtn) clearBtn.disabled = data.length === 0;
-
-    if (data.length === 0) {
-      tbody.innerHTML = '<tr><td colspan="8" class="empty">Нет событий</td></tr>';
-      return;
-    }
-
-    tbody.innerHTML = data.map(s => {
-      const actionBadge =
-        s.action === 'login' ? 'badge-info' :
-        s.action === 'calc' ? 'badge-info' :
-        s.action === 'scan' ? 'badge-success' :
-        s.action === 'error' ? 'badge-danger' : 'badge-warning';
-      return `
-        <tr>
-          <td>${formatDateTime(s.actionTime)}</td>
-          <td>${escapeHtml(s.userFullName || '--')}</td>
-          <td>${escapeHtml(s.userDepartment || '--')}</td>
-          <td><span class="badge ${actionBadge}">${s.action}</span></td>
-          <td>${s.qrCode ? '<code>' + escapeHtml(s.qrCode) + '</code>' : '--'}</td>
-          <td>${s.qrObjectName ? escapeHtml(s.qrObjectName) : '--'}</td>
-          <td>${s.comment ? escapeHtml(s.comment) : '--'}</td>
-          <td>
-            <div class="actions">
-              <button class="btn btn-danger btn-sm" onclick="deleteSession(${s.id})">Удалить</button>
-            </div>
-          </td>
-        </tr>
-      `;
-    }).join('');
-  } catch (e) {
-    toast('Ошибка загрузки: ' + e.message, 'error');
+    if (!res.ok) return toast(data.message || 'Ошибка', 'error');
+    toast(data.message);
+    await Promise.all([loadQr(), loadInventoryCabinets(), loadInventoryRuns(), loadSessions()]);
+  } catch (error) {
+    toast('Не удалось удалить QR-код: ' + error.message, 'error');
   }
 }
 
+// SESSIONS
+let adminSessionsData = [];
+let sessionsLoadInFlight = false;
+const actionPresentation = {
+  login: { label: 'Вход', badge: 'badge-info' },
+  logout: { label: 'Выход', badge: 'badge-info' },
+  calc: { label: 'Расчёт', badge: 'badge-info' },
+  scan: { label: 'Сканирование QR', badge: 'badge-success' },
+  inventory: { label: 'Инвентаризация', badge: 'badge-inventory' },
+  error: { label: 'Ошибка', badge: 'badge-danger' }
+};
+
+async function loadSessions(silent = false) {
+  if (sessionsLoadInFlight) return;
+  sessionsLoadInFlight = true;
+  try {
+    const res = await fetch(`${API}/api/admin/sessions`);
+    if (!res.ok) throw new Error('Сервер не смог загрузить журнал');
+    const data = await res.json();
+    adminSessionsData = Array.isArray(data) ? data : [];
+
+    // Обновляем состояние кнопки очистки
+    const clearBtn = document.getElementById('clear-sessions-btn');
+    if (clearBtn) clearBtn.disabled = adminSessionsData.length === 0;
+    renderSessions();
+  } catch (e) {
+    if (!silent) toast('Ошибка загрузки журнала: ' + e.message, 'error');
+  } finally {
+    sessionsLoadInFlight = false;
+  }
+}
+
+function renderSessions() {
+  const tbody = document.getElementById('sessions-body');
+  const actionFilter = document.getElementById('sessions-action-filter').value;
+  const search = document.getElementById('sessions-search').value.trim().toLocaleLowerCase('ru-RU');
+  const rows = adminSessionsData.filter(session => {
+    const action = String(session.action || '').toLowerCase();
+    const matchesAction = actionFilter === 'all' || action === actionFilter;
+    const matchesSearch = !search || [session.userFullName, session.userDepartment, session.qrCode,
+      session.qrObjectName, session.comment].some(value => String(value || '').toLocaleLowerCase('ru-RU').includes(search));
+    return matchesAction && matchesSearch;
+  });
+
+  if (!rows.length) {
+    const message = adminSessionsData.length ? 'По выбранному фильтру записей нет' : 'Нет событий';
+    tbody.innerHTML = `<tr><td colspan="8" class="empty">${message}</td></tr>`;
+    return;
+  }
+
+  tbody.innerHTML = rows.map(s => {
+    const action = String(s.action || '').toLowerCase();
+    const presentation = actionPresentation[action] || { label: s.action || 'Неизвестное действие', badge: 'badge-warning' };
+    return `
+      <tr>
+        <td>${formatDateTime(s.actionTime)}</td>
+        <td>${escapeHtml(s.userFullName || '--')}</td>
+        <td>${escapeHtml(s.userDepartment || '--')}</td>
+        <td><span class="badge ${presentation.badge}">${escapeHtml(presentation.label)}</span></td>
+        <td>${s.qrCode ? '<code>' + escapeHtml(s.qrCode) + '</code>' : '--'}</td>
+        <td>${s.qrObjectName ? escapeHtml(s.qrObjectName) : '--'}</td>
+        <td>${s.comment ? escapeHtml(s.comment) : '--'}</td>
+        <td><div class="actions"><button class="btn btn-danger btn-sm" onclick="deleteSession(${Number(s.id)})">Удалить</button></div></td>
+      </tr>
+    `;
+  }).join('');
+}
+
+document.getElementById('sessions-action-filter').addEventListener('change', renderSessions);
+document.getElementById('sessions-search').addEventListener('input', renderSessions);
+
 // Результаты инвентаризации, отправленные приложением через API
 let inventoryRunsData = [];
+let inventoryRunsLoadInFlight = false;
 
-async function loadInventoryRuns() {
+async function loadInventoryRuns(silent = false) {
+  if (inventoryRunsLoadInFlight) return;
+  inventoryRunsLoadInFlight = true;
   const tbody = document.getElementById('inventory-runs-body');
   try {
     const res = await fetch(`${API}/api/admin/inventory/runs`);
@@ -356,12 +390,15 @@ async function loadInventoryRuns() {
     renderInventoryRuns();
   } catch (error) {
     tbody.innerHTML = `<tr><td colspan="6" class="empty">${escapeHtml(error.message)}</td></tr>`;
-    toast('Не удалось загрузить результаты инвентаризации', 'error');
+    if (!silent) toast('Не удалось загрузить результаты инвентаризации', 'error');
+  } finally {
+    inventoryRunsLoadInFlight = false;
   }
 }
 
 function renderInventoryRuns() {
   const search = document.getElementById('search-runs').value.trim().toLocaleLowerCase('ru-RU');
+  const groupBy = document.getElementById('group-runs-by').value;
   const tbody = document.getElementById('inventory-runs-body');
   const rows = inventoryRunsData.filter(run =>
     [run.userFullName, run.userDepartment, run.cabinetTitle, run.qrCode]
@@ -371,7 +408,8 @@ function renderInventoryRuns() {
     tbody.innerHTML = `<tr><td colspan="6" class="empty">${inventoryRunsData.length ? 'По запросу ничего не найдено' : 'Пока нет завершённых проверок. Отправьте инвентаризацию из приложения — она появится здесь.'}</td></tr>`;
     return;
   }
-  tbody.innerHTML = rows.map(run => `
+
+  const renderRunRow = run => `
     <tr>
       <td>${formatDateTime(run.completedAt)}</td>
       <td>${escapeHtml(run.userFullName || '--')}</td>
@@ -380,10 +418,63 @@ function renderInventoryRuns() {
       <td><span class="badge badge-success">Есть: ${Number(run.presentCount) || 0}</span> <span class="badge badge-danger">Нет: ${Number(run.missingCount) || 0}</span></td>
       <td><button class="btn btn-secondary btn-sm" onclick="showInventoryRun(${Number(run.id)})">Подробнее</button></td>
     </tr>
+  `;
+
+  if (groupBy === 'none') {
+    tbody.innerHTML = rows.map(renderRunRow).join('');
+    return;
+  }
+
+  const groups = new Map();
+  rows.forEach(run => {
+    let key;
+    let title;
+    let subtitle = '';
+    if (groupBy === 'date') {
+      key = title = formatDate(run.completedAt);
+    } else if (groupBy === 'user') {
+      title = run.userFullName || 'Пользователь не указан';
+      subtitle = run.userDepartment || '';
+      key = `${title}\u0000${subtitle}`;
+    } else {
+      title = run.cabinetTitle || 'Шкаф не указан';
+      subtitle = run.qrCode || '';
+      key = `${title}\u0000${subtitle}`;
+    }
+
+    if (!groups.has(key)) groups.set(key, { title, subtitle, runs: [] });
+    groups.get(key).runs.push(run);
+  });
+
+  tbody.innerHTML = Array.from(groups.values()).map(group => `
+    <tr class="run-group-row"><td colspan="6">
+      <div class="run-group-heading"><strong>${escapeHtml(group.title)}</strong><span>${formatRunCount(group.runs.length)}</span></div>
+      ${group.subtitle ? `<div class="run-group-subtitle">${escapeHtml(group.subtitle)}</div>` : ''}
+    </td></tr>
+    ${group.runs.map(renderRunRow).join('')}
   `).join('');
 }
 
+function formatRunCount(count) {
+  const lastTwo = count % 100;
+  const lastOne = count % 10;
+  const word = lastTwo >= 11 && lastTwo <= 14 ? 'проверок' :
+    lastOne === 1 ? 'проверка' :
+    lastOne >= 2 && lastOne <= 4 ? 'проверки' : 'проверок';
+  return `${count} ${word}`;
+}
+
 document.getElementById('search-runs').addEventListener('input', renderInventoryRuns);
+document.getElementById('group-runs-by').addEventListener('change', renderInventoryRuns);
+
+const inventoryItemsInput = document.getElementById('inventory-items');
+inventoryItemsInput.addEventListener('input', renderInventoryItemsPreview);
+
+function renderInventoryItemsPreview() {
+  const preview = document.getElementById('inventory-items-preview');
+  const names = inventoryItemsInput.value.split(/\r?\n/).map(name => name.trim()).filter(Boolean);
+  preview.innerHTML = names.map(name => `<li>${escapeHtml(name)}</li>`).join('') || '<li class="checklist-preview-empty">Предметы появятся здесь в указанном порядке</li>';
+}
 
 async function showInventoryRun(id) {
   try {
@@ -396,9 +487,9 @@ async function showInventoryRun(id) {
       <div><span>Отдел</span><strong>${escapeHtml(run.userDepartment || '--')}</strong></div>
       <div><span>QR-код</span><strong><code>${escapeHtml(run.qrCode || '--')}</code></strong></div>
       <div><span>Завершена</span><strong>${formatDateTime(run.completedAt)}</strong></div>`;
-    document.getElementById('inventory-run-items').innerHTML = (run.items || []).map(item => `
-      <tr><td>${escapeHtml(item.itemName || '--')}</td><td><span class="badge ${item.status === 'present' ? 'badge-success' : 'badge-danger'}">${item.status === 'present' ? 'Есть' : 'Нет'}</span></td><td>${escapeHtml(item.comment || '—')}</td></tr>
-    `).join('') || '<tr><td colspan="3" class="empty">В этой проверке нет пунктов.</td></tr>';
+    document.getElementById('inventory-run-items').innerHTML = (run.items || []).map((item, index) => `
+      <tr><td class="run-item-number">${index + 1}</td><td>${escapeHtml(item.itemName || '--')}</td><td><span class="badge ${item.status === 'present' ? 'badge-success' : 'badge-danger'}">${item.status === 'present' ? 'Есть' : 'Нет'}</span></td><td>${escapeHtml(item.comment || '—')}</td></tr>
+    `).join('') || '<tr><td colspan="4" class="empty">В этой проверке нет пунктов.</td></tr>';
     document.getElementById('modal-inventory-run').classList.add('open');
   } catch (error) {
     toast('Ошибка загрузки проверки: ' + error.message, 'error');
@@ -507,8 +598,28 @@ function renderInventoryCabinets() {
       <td>${item.cabinetId ? escapeHtml(item.title) : '<span class="badge badge-warning">Не настроен</span>'}</td>
       <td>${item.photoAvailable ? '<span class="badge badge-success">Добавлено</span>' : '<span class="badge badge-warning">Нет фото</span>'}</td>
       <td>${item.itemCount}</td>
-      <td><button class="btn btn-secondary btn-sm" onclick="openInventoryCabinet(${item.qrCodeId})">${item.cabinetId ? 'Настроить' : 'Создать шкаф'}</button></td>
+      <td><div class="row-actions">
+        <button class="btn btn-secondary btn-sm" onclick="openInventoryCabinet(${item.qrCodeId})">${item.cabinetId ? 'Настроить' : 'Создать шкаф'}</button>
+        ${item.cabinetId ? `<button class="btn btn-danger btn-sm" onclick="deleteInventoryCabinet(${item.qrCodeId})">Удалить шкаф</button>` : ''}
+      </div></td>
     </tr>`).join('');
+}
+
+async function deleteInventoryCabinet(qrCodeId) {
+  const cabinet = inventoryCabinets.find(item => Number(item.qrCodeId) === Number(qrCodeId));
+  if (!cabinet?.cabinetId) return toast('Настроенный шкаф не найден.', 'error');
+  const title = cabinet.title || cabinet.objectName || cabinet.qrCode;
+  if (!confirm(`Удалить шкаф «${title}» (${cabinet.qrCode}) вместе с QR-кодом, фотографиями, чек-листом и всей историей инвентаризаций? Это действие нельзя отменить.`)) return;
+
+  try {
+    const response = await fetch(`${API}/api/admin/inventory/cabinets/${qrCodeId}`, { method: 'DELETE' });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.message || 'Не удалось удалить шкаф');
+    toast(data.message || 'Шкаф и его история удалены');
+    await Promise.all([loadInventoryCabinets(), loadInventoryRuns()]);
+  } catch (error) {
+    toast('Ошибка удаления шкафа: ' + error.message, 'error');
+  }
 }
 
 document.getElementById('search-inventory').oninput = renderInventoryCabinets;
@@ -523,6 +634,7 @@ async function openInventoryCabinet(qrCodeId) {
     document.getElementById('inventory-qr-code').value = data.qrCode;
     document.getElementById('inventory-title').value = data.title;
     document.getElementById('inventory-items').value = data.items.map(item => item.name).join('\n');
+    renderInventoryItemsPreview();
     photosMarkedForRemoval.clear();
     [1, 2].forEach(page => {
       document.getElementById(`inventory-photo-${page}`).value = '';
@@ -641,3 +753,13 @@ async function checkApiStatus() {
 
 checkApiStatus();
 loadUsers();
+
+function refreshVisibleAdminPanel() {
+  if (document.visibilityState !== 'visible') return;
+  if (document.getElementById('panel-sessions').style.display !== 'none') loadSessions(true);
+  else if (document.getElementById('panel-runs').style.display !== 'none') loadInventoryRuns(true);
+}
+
+setInterval(refreshVisibleAdminPanel, 10000);
+window.addEventListener('focus', refreshVisibleAdminPanel);
+document.addEventListener('visibilitychange', refreshVisibleAdminPanel);

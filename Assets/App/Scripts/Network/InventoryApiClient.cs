@@ -44,14 +44,39 @@ namespace ArInventory.Network
     public static class InventoryApiClient
     {
         private const string BaseAddressKey = "ArInventory.ApiBaseUrl";
+        private static string lastLoggedBaseUrl;
 
         public static string BaseUrl
         {
             get
             {
                 var saved = PlayerPrefs.GetString(BaseAddressKey, string.Empty);
-                if (!string.IsNullOrWhiteSpace(saved)) return saved.TrimEnd('/');
-                return Application.isEditor ? SyncManager.USB_URL : SyncManager.WIFI_URL;
+                string resolved;
+
+                if (!string.IsNullOrWhiteSpace(saved))
+                {
+                    saved = saved.Trim().TrimEnd('/');
+
+                    // PlayerPrefs survives app updates. A previously selected USB address
+                    // (127.0.0.1) points back to the phone after the cable/reverse tunnel is gone.
+                    // Keep USB available for an explicit Sync action, but use Wi-Fi for the
+                    // regular cabinet/photo/checklist API calls on Android.
+                    resolved = Application.platform == RuntimePlatform.Android && IsLoopback(saved)
+                        ? SyncManager.WIFI_URL
+                        : saved;
+                }
+                else
+                {
+                    resolved = Application.isEditor ? SyncManager.USB_URL : SyncManager.WIFI_URL;
+                }
+
+                if (resolved != lastLoggedBaseUrl)
+                {
+                    lastLoggedBaseUrl = resolved;
+                    Debug.Log($"[API] Адрес API для запросов приложения: {resolved}");
+                }
+
+                return resolved;
             }
         }
 
@@ -143,9 +168,18 @@ namespace ArInventory.Network
         private static string ReadableError(UnityWebRequest request)
         {
             var serverMessage = request.downloadHandler != null ? request.downloadHandler.text : string.Empty;
+            string target = request.url;
+            if (Uri.TryCreate(request.url, UriKind.Absolute, out var uri))
+                target = uri.GetLeftPart(UriPartial.Authority);
+
             return string.IsNullOrWhiteSpace(serverMessage)
-                ? request.error
-                : $"{request.error}: {serverMessage}";
+                ? $"{request.error} (API: {target})"
+                : $"{request.error} (API: {target}): {serverMessage}";
+        }
+
+        private static bool IsLoopback(string address)
+        {
+            return Uri.TryCreate(address, UriKind.Absolute, out var uri) && uri.IsLoopback;
         }
     }
 }

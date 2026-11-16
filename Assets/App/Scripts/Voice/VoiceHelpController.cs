@@ -1,189 +1,219 @@
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
 using TMPro;
 using UnityEngine;
 using UnityEngine.SceneManagement;
 using UnityEngine.UI;
 
-// Вешается на кнопку «Помощь» в каждой сцене.
-// Открывает большую панель со списком голосовых команд текущей сцены.
+/// <summary>Controls the scene-authored voice help overlay and command feedback.</summary>
 [RequireComponent(typeof(Button))]
-public class VoiceHelpController : MonoBehaviour
+public sealed class VoiceHelpController : MonoBehaviour
 {
     public static VoiceHelpController Instance { get; private set; }
 
-    private GameObject panelRoot;
+    [Header("Scene UI")]
+    [SerializeField] private GameObject panelRoot;
+    [SerializeField] private TextMeshProUGUI commandsText;
+    [SerializeField] private Button closeButton;
+    [SerializeField] private GameObject statusToast;
+    [SerializeField] private TextMeshProUGUI statusText;
 
-    // В вертикальной ориентации всё в 2 раза крупнее — иначе не читается
-    private static float M => Screen.height > Screen.width ? 2f : 1f;
+    private Coroutine statusRoutine;
 
-    void Awake()
+    public static bool IsOpen => Instance != null && Instance.panelRoot != null && Instance.panelRoot.activeSelf;
+
+    private void Awake()
     {
         Instance = this;
         GetComponent<Button>().onClick.AddListener(Toggle);
+        if (closeButton != null)
+            closeButton.onClick.AddListener(Close);
+
+        if (panelRoot != null)
+            panelRoot.SetActive(false);
+        if (statusToast != null)
+            statusToast.SetActive(false);
     }
 
-    void OnDestroy()
+    private void OnDestroy()
     {
-        if (Instance == this) Instance = null;
-    }
-
-    public static bool IsOpen => Instance != null && Instance.panelRoot != null;
-
-    public static void CloseIfOpen()
-    {
-        if (IsOpen) Instance.Close();
+        if (Instance == this)
+            Instance = null;
     }
 
     public void Toggle()
     {
-        if (IsOpen) Close(); else Open();
+        if (IsOpen)
+            Close();
+        else
+            Open();
     }
 
-    public void Open() => BuildPanel();
+    public void Open()
+    {
+        if (panelRoot == null)
+        {
+            ShowFeedback("Голосовая помощь не настроена в сцене.");
+            Debug.LogError("[Voice Help] Не назначен объект Panel Root в Inspector.");
+            return;
+        }
+
+        RefreshCommands();
+        panelRoot.SetActive(true);
+    }
 
     public void Close()
     {
         if (panelRoot != null)
-        {
-            Destroy(panelRoot);
-            panelRoot = null;
-        }
+            panelRoot.SetActive(false);
     }
 
-    // ==========================================
-    // Панель помощи
-    // ==========================================
-    private void BuildPanel()
+    public static void CloseIfOpen()
     {
-        Close();
-
-        panelRoot = new GameObject("VoiceHelpPanel");
-        var canvas = panelRoot.AddComponent<Canvas>();
-        canvas.renderMode = RenderMode.ScreenSpaceOverlay;
-        canvas.sortingOrder = 9600;
-        var scaler = panelRoot.AddComponent<CanvasScaler>();
-        scaler.uiScaleMode = CanvasScaler.ScaleMode.ScaleWithScreenSize;
-        scaler.referenceResolution = new Vector2(1920, 1080);
-        panelRoot.AddComponent<GraphicRaycaster>(); // пока панель открыта — клики только в неё
-
-        // Затемнение фона
-        var dim = CreateUI("Dim", panelRoot.transform);
-        dim.AddComponent<Image>().color = new Color(0f, 0f, 0f, 0.6f);
-        Stretch(dim.GetComponent<RectTransform>());
-
-        // Центральная панель
-        var box = CreateUI("Box", panelRoot.transform);
-        box.AddComponent<Image>().color = new Color(0.08f, 0.10f, 0.15f, 0.97f);
-        var boxRt = box.GetComponent<RectTransform>();
-        boxRt.anchorMin = new Vector2(0.5f, 0.5f);
-        boxRt.anchorMax = new Vector2(0.5f, 0.5f);
-        boxRt.sizeDelta = new Vector2(1400, 920 * M);
-
-        var vlg = box.AddComponent<VerticalLayoutGroup>();
-        vlg.padding = new RectOffset((int)(50 * M), (int)(50 * M), (int)(30 * M), (int)(30 * M));
-        vlg.spacing = 20 * M;
-        vlg.childControlWidth = true;
-        vlg.childControlHeight = true;
-
-        // Заголовок
-        var titleGo = CreateUI("Title", box.transform);
-        var title = titleGo.AddComponent<TextMeshProUGUI>();
-        SetFont(title);
-        title.text = "ГОЛОСОВОЕ УПРАВЛЕНИЕ — КОМАНДЫ";
-        title.fontSize = 46 * M;
-        title.fontStyle = FontStyles.Bold;
-        title.alignment = TextAlignmentOptions.Center;
-        title.color = new Color(0.5f, 0.86f, 1f);
-        titleGo.AddComponent<LayoutElement>().preferredHeight = 70 * M;
-
-        // Список команд
-        var contentGo = CreateUI("Commands", box.transform);
-        var content = contentGo.AddComponent<TextMeshProUGUI>();
-        SetFont(content);
-        content.text = GetCommandsText();
-        content.fontSize = 30 * M;
-        content.alignment = TextAlignmentOptions.Left;
-        content.color = Color.white;
-        content.enableWordWrapping = true;
-        var le = contentGo.AddComponent<LayoutElement>();
-        le.flexibleHeight = 1;
-
-        // Кнопка «Закрыть»
-        var closeGo = CreateUI("CloseBtn", box.transform);
-        closeGo.AddComponent<Image>().color = new Color(0.55f, 0.20f, 0.20f);
-        var closeBtn = closeGo.AddComponent<Button>();
-        var ctGo = CreateUI("Text", closeGo.transform);
-        var ct = ctGo.AddComponent<TextMeshProUGUI>();
-        SetFont(ct);
-        ct.text = "Закрыть";
-        ct.fontSize = 36 * M;
-        ct.alignment = TextAlignmentOptions.Center;
-        ct.color = Color.white;
-        Stretch(ctGo.GetComponent<RectTransform>());
-        closeBtn.onClick.AddListener(Close);
-        closeGo.AddComponent<LayoutElement>().preferredHeight = 80 * M;
+        if (IsOpen)
+            Instance.Close();
     }
 
-    private string GetCommandsText()
+    public void RefreshCommands()
     {
+        if (commandsText == null)
+            return;
+
+        commandsText.text = BuildCommandsText();
+    }
+
+    public void ShowFeedback(string message)
+    {
+        if (statusToast == null || statusText == null || string.IsNullOrWhiteSpace(message))
+            return;
+
+        statusText.text = message;
+        statusToast.SetActive(true);
+        if (statusRoutine != null)
+            StopCoroutine(statusRoutine);
+        statusRoutine = StartCoroutine(HideStatusAfterDelay());
+    }
+
+    private System.Collections.IEnumerator HideStatusAfterDelay()
+    {
+        yield return new WaitForSeconds(3.5f);
+        if (statusToast != null)
+            statusToast.SetActive(false);
+        statusRoutine = null;
+    }
+
+    private string BuildCommandsText()
+    {
+        var lines = new List<string>();
         string scene = SceneManager.GetActiveScene().name;
 
         if (scene == "LoginScene")
-            return
-                "<b><color=#7FDBFF>АВТОРИЗАЦИЯ</color></b>\n" +
-                "   «фио» — перейти к полю имени\n" +
-                "   «пароль» — перейти к полю пароля\n" +
-                "   «отдел» — открыть список отделов\n" +
-                "   «вверх» / «вниз» — листать список\n" +
-                "   «выбрать» — закрыть список\n" +
-                "   «войти» — войти в систему\n\n" +
-                "<color=#FFD466>Команды понимаются и по-английски: name / password / department / up / down / login.</color>";
+        {
+            lines.Add("АВТОРИЗАЦИЯ");
+            lines.Add("Авторизация: «ФИО», затем «введи [имя]»; «пароль», затем «введи пароль [текст]».");
+            lines.Add("Отдел: скажите «отдел», затем «вверх» / «вниз» и «выбрать»; или сразу «отдел [название]». Для входа скажите «войти».");
+        }
+        else if (scene == "StartScene")
+        {
+            lines.Add("ГЛАВНОЕ МЕНЮ");
+            lines.Add("Главное меню: «сканировать QR», «инструкция», «синхронизировать», «Wi-Fi», «USB», «выход».");
+        }
+        else
+        {
+            lines.Add("AR-СЦЕНА");
+            lines.Add("AR-сцена: «сканировать QR», «главное меню», «меню объектов», «отмена», «удалить объекты».");
+            lines.Add("Карточки: «калькулятор», «вид шкафа», «инвентаризация», «веб». Чтобы убрать одну, скажите «закрой карточку» или назовите её тип: «закрой калькулятор», «закрой шкаф», «закрой инвентаризацию».");
+            lines.Add("Размер: «увеличь карточку», «уменьши карточку», «сбрось размер»; можно назвать карточку, например «увеличь калькулятор».");
+        }
 
-        if (scene == "StartScene")
-            return
-                "<b><color=#7FDBFF>ГЛАВНОЕ МЕНЮ</color></b>\n" +
-                "   «сканировать» — запустить сканер QR\n" +
-                "   «инструкция» — открыть инструкцию\n" +
-                "   «синхронизация» — синхронизировать данные\n" +
-                "   «вай-фай» / «usb» — настройки подключения\n" +
-                "   «закрыть» — закрыть открытую панель\n" +
-                "   «выход» — выход из приложения\n\n" +
-                "<color=#FFD466>Команды понимаются и по-английски: scan / instruction / sync / wifi / usb / close / exit.</color>";
+        if (InventoryChecklistController.Active != null)
+        {
+            InventoryChecklistController inventory = InventoryChecklistController.Active;
+            lines.Add("Инвентаризация: «есть [предмет]», «нет [предмет]», «отправить проверку».");
+            if (inventory.VoiceItemNames.Count > 0)
+            {
+                string numberedItems = string.Join("; ", inventory.VoiceItemNames.Select((name, index) => $"{index + 1}. {name}"));
+                lines.Add("Пункты чек-листа: " + numberedItems + ". Скажите, например, «есть веник» или «нет ведро».");
+            }
+        }
+        if (FindObjectsByType<CalculatorController>(FindObjectsInactive.Include).Any(card => card.gameObject.activeInHierarchy))
+            lines.Add("Калькулятор: цифры, «плюс», «минус», «умножить», «разделить», «равно», «очистить калькулятор».");
+        if (FindObjectsByType<ImageCardController>(FindObjectsInactive.Include).Any(card => card.gameObject.activeInHierarchy))
+            lines.Add("Фото/лист: «нажми лист 1», «нажми лист 2», «закрыть карточку».");
+        if (WebOverlayController.Instance != null && WebOverlayController.Instance.IsOpen)
+            lines.Add("Веб-окно: «приблизь страницу», «отдали страницу», «сдвинь веб-окно влево/вправо/вверх/вниз», «закрой веб».");
 
-        return
-            "<b><color=#7FDBFF>AR-СЦЕНА</color></b>\n" +
-            "   «далее» — закрыть приветствие      «меню» — открыть меню объектов\n" +
-            "   «настройки» — открыть настройки    «отмена» — закрыть меню\n" +
-            "   «подсказки» / «плоскости» / «дебаг» — пункты настроек\n" +
-            "   «удалить» — удалить объекты\n" +
-            "   «калькулятор» — создать калькулятор\n" +
-            "   «веб» → затем «объект» или «оверлей» — веб-страница\n" +
-            "   «карточка» — карточка изображения\n" +
-            "   «положить» / «отпустить» — закрепить / отпустить\n" +
-            "   «закрыть» — закрыть всё      «назад» — в главное меню\n" +
-            "   «помощь» — открыть/закрыть эту панель\n\n" +
-            "<color=#FFD466>Команды понимаются и по-английски: calculator / web / card / close / back / help…</color>";
+        var buttons = FindObjectsByType<Button>(FindObjectsInactive.Include)
+            .Where(button => button != null && button.gameObject.activeInHierarchy && button.IsInteractable())
+            .Where(button => button.GetComponent<VoiceHelpController>() == null && button.GetComponentInParent<VoiceHelpController>() == null)
+            .Select(GetButtonLabel)
+            .Where(label => !string.IsNullOrWhiteSpace(label))
+            .Distinct()
+            .ToArray();
+        var fields = FindObjectsByType<TMP_InputField>(FindObjectsInactive.Include)
+            .Where(field => field != null && field.gameObject.activeInHierarchy && field.interactable)
+            .Select(GetInputLabel)
+            .Where(label => !string.IsNullOrWhiteSpace(label))
+            .Distinct()
+            .ToArray();
+        var dropdowns = FindObjectsByType<TMP_Dropdown>(FindObjectsInactive.Include)
+            .Where(dropdown => dropdown != null && dropdown.gameObject.activeInHierarchy && dropdown.IsInteractable())
+            .ToArray();
+
+        if (buttons.Length > 0)
+        {
+            lines.Add("КНОПКИ НА ЭКРАНЕ");
+            lines.Add(string.Join(" · ", buttons) + ". Скажите название кнопки или «нажми [название]».");
+        }
+        if (fields.Length > 0)
+        {
+            lines.Add("ПОЛЯ НА ЭКРАНЕ");
+            lines.Add(string.Join(" · ", fields) + ". Скажите «поле [название]», затем «введи [текст]».");
+        }
+        if (dropdowns.Length > 0)
+        {
+            lines.Add("СПИСКИ НА ЭКРАНЕ");
+            foreach (TMP_Dropdown dropdown in dropdowns)
+            {
+                string options = string.Join(" · ", dropdown.options.Select(option => option.text));
+                lines.Add($"{GetDropdownLabel(dropdown)}: {options}. Скажите «выбери [вариант]».");
+            }
+        }
+
+        lines.Add("Общие команды: «нажми [название кнопки]»; «прокрути вверх/вниз»; «помощь» открывает, а «закрой подсказки» закрывает это окно.");
+        lines.Add("Для ввода: «поле [название]», затем «введи [текст]»; «очисти поле» стирает содержимое.");
+
+        // Keep commands on consecutive lines. Blank paragraphs made short phone screens
+        // spend nearly half of the help view on spacing instead of instructions.
+        return string.Join("\n", lines);
     }
 
-    // ==========================================
-    // Вспомогательные
-    // ==========================================
-    private GameObject CreateUI(string name, Transform parent)
+    private static string GetButtonLabel(Button button)
     {
-        var go = new GameObject(name);
-        go.transform.SetParent(parent, false);
-        return go;
+        TMP_Text text = button.GetComponentInChildren<TMP_Text>(true);
+        if (text != null && !string.IsNullOrWhiteSpace(text.text))
+            return text.text.Trim();
+
+        Text legacy = button.GetComponentInChildren<Text>(true);
+        return legacy != null && !string.IsNullOrWhiteSpace(legacy.text)
+            ? legacy.text.Trim()
+            : button.gameObject.name;
     }
 
-    private void Stretch(RectTransform rt)
+    private static string GetInputLabel(TMP_InputField field)
     {
-        rt.anchorMin = Vector2.zero;
-        rt.anchorMax = Vector2.one;
-        rt.offsetMin = Vector2.zero;
-        rt.offsetMax = Vector2.zero;
+        TMP_Text placeholder = field.placeholder as TMP_Text;
+        if (placeholder != null && !string.IsNullOrWhiteSpace(placeholder.text))
+            return placeholder.text.Trim();
+        return field.gameObject.name;
     }
 
-    private void SetFont(TextMeshProUGUI tmp)
+    private static string GetDropdownLabel(TMP_Dropdown dropdown)
     {
-        if (TMP_Settings.defaultFontAsset != null) tmp.font = TMP_Settings.defaultFontAsset;
+        TMP_Text caption = dropdown.captionText;
+        return caption != null && !string.IsNullOrWhiteSpace(caption.text)
+            ? caption.text.Trim()
+            : dropdown.gameObject.name;
     }
 }

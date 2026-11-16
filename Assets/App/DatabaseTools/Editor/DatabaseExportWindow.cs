@@ -86,6 +86,7 @@ public class DatabaseExportWindow : EditorWindow
             long usersCount;
             long qrCount;
             long cabinetCount;
+            long secondPagePhotoCount;
             long checklistItemCount;
 
             using (var postgres = new NpgsqlConnection(settings.ConnectionString))
@@ -98,16 +99,21 @@ public class DatabaseExportWindow : EditorWindow
                     sqlite.CreateTable<LocalQrCode>();
                     sqlite.CreateTable<LocalInventorySession>();
                     sqlite.CreateTable<LocalCabinetProfile>();
+                    sqlite.CreateTable<LocalCabinetPhoto>();
                     sqlite.CreateTable<LocalCabinetChecklistItem>();
 
                     ExportUsers(postgres, sqlite);
                     ExportQrCodes(postgres, sqlite);
                     ExportCabinets(postgres, sqlite);
+                    ExportCabinetPhotos(postgres, sqlite);
                     ExportChecklistItems(postgres, sqlite);
+
+                    ValidateExportRelations(sqlite);
 
                     usersCount = sqlite.Table<LocalUser>().Count();
                     qrCount = sqlite.Table<LocalQrCode>().Count();
                     cabinetCount = sqlite.Table<LocalCabinetProfile>().Count();
+                    secondPagePhotoCount = sqlite.Table<LocalCabinetPhoto>().Count();
                     checklistItemCount = sqlite.Table<LocalCabinetChecklistItem>().Count();
                 }
             }
@@ -117,7 +123,7 @@ public class DatabaseExportWindow : EditorWindow
 
             EditorUtility.DisplayDialog(
                 "Экспорт выполнен",
-                $"Файл обновлён:\n{outputPath}\n\nПользователей: {usersCount}\nQR-кодов: {qrCount}\nШкафов: {cabinetCount}\nПунктов перечня: {checklistItemCount}",
+                $"Файл обновлён:\n{outputPath}\n\nПользователей: {usersCount}\nQR-кодов: {qrCount}\nШкафов: {cabinetCount}\nФото листа 2: {secondPagePhotoCount}\nПунктов перечня: {checklistItemCount}",
                 "OK");
         }
         catch (Exception exception)
@@ -137,14 +143,16 @@ public class DatabaseExportWindow : EditorWindow
         {
             while (reader.Read())
             {
-                sqlite.Insert(new LocalUser
-                {
-                    id = Convert.ToInt64(reader.GetValue(0)),
-                    full_name = reader.GetString(1),
-                    department = reader.GetString(2),
-                    password_hash = reader.GetString(3),
-                    is_active = reader.GetBoolean(4)
-                });
+                // SQLite-net omits auto-increment primary keys during Insert, even
+                // when the source id is assigned. Preserve PostgreSQL ids explicitly
+                // because other exported rows refer to them.
+                sqlite.Execute(
+                    "INSERT INTO users (id, full_name, department, password_hash, is_active) VALUES (?, ?, ?, ?, ?)",
+                    Convert.ToInt64(reader.GetValue(0)),
+                    reader.GetString(1),
+                    reader.GetString(2),
+                    reader.GetString(3),
+                    reader.GetBoolean(4));
             }
         }
     }
@@ -158,13 +166,12 @@ public class DatabaseExportWindow : EditorWindow
         {
             while (reader.Read())
             {
-                sqlite.Insert(new LocalQrCode
-                {
-                    id = reader.GetInt64(0),
-                    code = reader.GetString(1),
-                    object_name = reader.GetString(2),
-                    is_active = reader.GetBoolean(3)
-                });
+                sqlite.Execute(
+                    "INSERT INTO qr_codes (id, code, object_name, is_active) VALUES (?, ?, ?, ?)",
+                    reader.GetInt64(0),
+                    reader.GetString(1),
+                    reader.GetString(2),
+                    reader.GetBoolean(3));
             }
         }
     }
@@ -181,15 +188,16 @@ public class DatabaseExportWindow : EditorWindow
         {
             while (reader.Read())
             {
-                sqlite.Insert(new LocalCabinetProfile
-                {
-                    id = reader.GetInt64(0),
-                    qr_code_id = reader.GetInt64(1),
-                    title = reader.GetString(2),
-                    reference_photo = reader.IsDBNull(3) ? null : (byte[])reader.GetValue(3),
-                    reference_photo_content_type = reader.IsDBNull(4) ? "image/jpeg" : reader.GetString(4),
-                    is_active = reader.GetBoolean(5)
-                });
+                sqlite.Execute(
+                    @"INSERT INTO cabinet_profiles
+                      (id, qr_code_id, title, reference_photo, reference_photo_content_type, is_active)
+                      VALUES (?, ?, ?, ?, ?, ?)",
+                    reader.GetInt64(0),
+                    reader.GetInt64(1),
+                    reader.GetString(2),
+                    reader.IsDBNull(3) ? null : (byte[])reader.GetValue(3),
+                    reader.IsDBNull(4) ? "image/jpeg" : reader.GetString(4),
+                    reader.GetBoolean(5));
             }
         }
     }
@@ -205,15 +213,76 @@ public class DatabaseExportWindow : EditorWindow
         {
             while (reader.Read())
             {
-                sqlite.Insert(new LocalCabinetChecklistItem
-                {
-                    id = reader.GetInt64(0),
-                    cabinet_id = reader.GetInt64(1),
-                    item_name = reader.GetString(2),
-                    description = reader.IsDBNull(3) ? string.Empty : reader.GetString(3),
-                    sort_order = reader.GetInt32(4),
-                    is_active = reader.GetBoolean(5)
-                });
+                sqlite.Execute(
+                    @"INSERT INTO cabinet_checklist_items
+                      (id, cabinet_id, item_name, description, sort_order, is_active)
+                      VALUES (?, ?, ?, ?, ?, ?)",
+                    reader.GetInt64(0),
+                    reader.GetInt64(1),
+                    reader.GetString(2),
+                    reader.IsDBNull(3) ? string.Empty : reader.GetString(3),
+                    reader.GetInt32(4),
+                    reader.GetBoolean(5));
+            }
+        }
+    }
+
+    private static void ValidateExportRelations(SQLiteConnection sqlite)
+    {
+        int cabinetsWithoutQr = sqlite.ExecuteScalar<int>(@"
+            SELECT COUNT(*)
+            FROM cabinet_profiles cabinet
+            LEFT JOIN qr_codes qr ON qr.id = cabinet.qr_code_id
+            WHERE qr.id IS NULL");
+        int itemsWithoutCabinet = sqlite.ExecuteScalar<int>(@"
+            SELECT COUNT(*)
+            FROM cabinet_checklist_items item
+            LEFT JOIN cabinet_profiles cabinet ON cabinet.id = item.cabinet_id
+            WHERE cabinet.id IS NULL");
+        int photosWithoutCabinet = sqlite.ExecuteScalar<int>(@"
+            SELECT COUNT(*)
+            FROM cabinet_photos photo
+            LEFT JOIN cabinet_profiles cabinet ON cabinet.id = photo.cabinet_id
+            WHERE cabinet.id IS NULL");
+
+        if (cabinetsWithoutQr > 0 || itemsWithoutCabinet > 0 || photosWithoutCabinet > 0)
+        {
+            throw new InvalidOperationException(
+                $"В исходной базе нарушены связи: шкафов без QR-кода — {cabinetsWithoutQr}, " +
+                $"пунктов без шкафа — {itemsWithoutCabinet}, фото без шкафа — {photosWithoutCabinet}. Экспорт отменён.");
+        }
+    }
+
+    private static void ExportCabinetPhotos(NpgsqlConnection postgres, SQLiteConnection sqlite)
+    {
+        bool photoTableExists;
+        using (var exists = new NpgsqlCommand("SELECT to_regclass('public.cabinet_photos') IS NOT NULL", postgres))
+            photoTableExists = (bool)exists.ExecuteScalar();
+
+        if (!photoTableExists) return;
+
+        // The first page is already stored in cabinet_profiles.reference_photo.
+        // Export page 2 separately to avoid duplicating large image blobs in the APK.
+        using (var command = new NpgsqlCommand(@"
+                   SELECT id, cabinet_id, page_number, image_data, content_type, caption
+                   FROM cabinet_photos
+                   WHERE page_number = 2
+                   ORDER BY cabinet_id
+               ", postgres))
+        using (var reader = command.ExecuteReader())
+        {
+            while (reader.Read())
+            {
+                sqlite.Execute(
+                    @"INSERT INTO cabinet_photos
+                      (id, cabinet_id, page_number, image_data, content_type, caption)
+                      VALUES (?, ?, ?, ?, ?, ?)",
+                    reader.GetInt64(0),
+                    reader.GetInt64(1),
+                    reader.GetInt16(2),
+                    (byte[])reader.GetValue(3),
+                    reader.GetString(4),
+                    reader.GetString(5));
             }
         }
     }

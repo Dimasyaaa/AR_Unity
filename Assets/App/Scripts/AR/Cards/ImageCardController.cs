@@ -50,7 +50,9 @@ public class ImageCardController : MonoBehaviour
             {
                 cabinetMode = true;
                 cabinetTitle = localCabinet.title;
-                AddLocalFallbackPhoto(localCabinet.reference_photo);
+                AddLocalFallbackPhoto(1, localCabinet.reference_photo);
+                foreach (var photo in LocalDatabase.Instance.GetCabinetPhotos(localCabinet.id))
+                    AddLocalFallbackPhoto(photo.page_number, photo.image_data);
                 ShowCabinetPage(0);
             }
             else
@@ -126,13 +128,15 @@ public class ImageCardController : MonoBehaviour
         }
     }
 
-    private void AddLocalFallbackPhoto(byte[] bytes)
+    private void AddLocalFallbackPhoto(int pageNumber, byte[] bytes)
     {
-        if (bytes == null || bytes.Length == 0) return;
+        int pageIndex = pageNumber - 1;
+        if (pageIndex < 0 || pageIndex >= cabinetPhotos.Length || bytes == null || bytes.Length == 0) return;
         var texture = new Texture2D(2, 2, TextureFormat.RGBA32, false);
         if (!ImageConversion.LoadImage(texture, bytes)) { Destroy(texture); return; }
-        cabinetPhotos[0] = texture;
-        availablePages[0] = true;
+        if (cabinetPhotos[pageIndex] != null) Destroy(cabinetPhotos[pageIndex]);
+        cabinetPhotos[pageIndex] = texture;
+        availablePages[pageIndex] = true;
         UpdatePageButtons();
     }
 
@@ -140,6 +144,17 @@ public class ImageCardController : MonoBehaviour
     {
         if (cabinetMode) ShowCabinetPage(index);
         else ShowSheet(index);
+    }
+
+    public bool SelectPageFromVoice(int index)
+    {
+        int page = Mathf.Clamp(index, 0, 1);
+        bool available = cabinetMode
+            ? availablePages[page]
+            : sheets != null && page < sheets.Length && sheets[page] != null;
+        if (!available) return false;
+        SelectPage(page);
+        return true;
     }
 
     private void ShowCabinetPage(int index)

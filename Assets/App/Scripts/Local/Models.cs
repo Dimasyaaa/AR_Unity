@@ -53,6 +53,19 @@ namespace ArInventory.Local
         public bool is_active { get; set; }
     }
 
+    [Table("cabinet_photos")]
+    public class LocalCabinetPhoto
+    {
+        [PrimaryKey, AutoIncrement]
+        public long id { get; set; }
+
+        public long cabinet_id { get; set; }
+        public int page_number { get; set; }
+        public byte[] image_data { get; set; }
+        public string content_type { get; set; }
+        public string caption { get; set; }
+    }
+
     [Table("cabinet_checklist_items")]
     public class LocalCabinetChecklistItem
     {

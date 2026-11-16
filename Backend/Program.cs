@@ -712,18 +712,46 @@ app.MapDelete("/api/admin/qr/{id:long}", (long id) =>
 {
     using var conn = new NpgsqlConnection(connectionString);
     conn.Open();
+    using var transaction = conn.BeginTransaction();
 
-    using var cmd = new NpgsqlCommand("DELETE FROM qr_codes WHERE id = @id", conn);
+    using (var exists = new NpgsqlCommand("SELECT EXISTS (SELECT 1 FROM qr_codes WHERE id = @id)", conn, transaction))
+    {
+        exists.Parameters.AddWithValue("id", id);
+        if (!(bool)exists.ExecuteScalar()!)
+        {
+            transaction.Rollback();
+            return Results.NotFound(new { success = false, message = "QR-код не найден" });
+        }
+    }
+
+    var deletion = InventoryApi.DeleteQrDependencies(conn, transaction, id, requireCabinet: false);
+
+    using var cmd = new NpgsqlCommand("DELETE FROM qr_codes WHERE id = @id", conn, transaction);
     cmd.Parameters.AddWithValue("@id", id);
-
     var affected = cmd.ExecuteNonQuery();
-    return affected > 0
-        ? Results.Ok(new { success = true, message = "QR-код удален" })
-        : Results.NotFound(new { success = false, message = "QR-код не найден" });
+    if (affected == 0)
+    {
+        transaction.Rollback();
+        return Results.NotFound(new { success = false, message = "QR-код не найден" });
+    }
+
+    transaction.Commit();
+    return Results.Ok(new
+    {
+        success = true,
+        message = deletion?.CabinetId is not null
+            ? "Шкаф, QR-код и история инвентаризаций удалены"
+            : "QR-код удалён; события журнала сохранены без связи с ним",
+        deletedRunItems = deletion?.DeletedRunItems ?? 0,
+        deletedRuns = deletion?.DeletedRuns ?? 0,
+        deletedChecklistItems = deletion?.DeletedChecklistItems ?? 0,
+        deletedPhotos = deletion?.DeletedPhotos ?? 0,
+        deletedEvents = deletion?.DeletedEvents ?? 0
+    });
 })
 .WithTags("Admin: QR")
 .WithSummary("Удаление QR-кода")
-.WithDescription("Связанные сессии в inventory_sessions не удаляются, но поле qr_code_id становится NULL (ON DELETE SET NULL). Возможные ответы: 200 -- удалён, 404 -- не найден.")
+.WithDescription("Если QR привязан к шкафу, транзакционно удаляет шкаф, фотографии, чек-лист и историю. Для обычного QR события журнала остаются, а ссылка на удалённый код очищается.")
 .Produces(200)
 .Produces(404);
 
@@ -773,7 +801,7 @@ app.MapGet("/api/admin/sessions", () =>
 })
 .WithTags("Admin: Sessions")
 .WithSummary("Журнал событий (последние 500)")
-.WithDescription("Логины и сканирования с информацией о пользователе и (для сканирований) о QR-коде. Сортировка по убыванию времени.")
+.WithDescription("События входа, сканирования QR-кодов, расчётов и завершённых инвентаризаций с информацией о пользователе и связанном шкафе. Сортировка по убыванию времени.")
 .Produces(200);
 
 // АДМИНКА: удаление одной записи журнала
