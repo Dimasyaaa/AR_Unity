@@ -82,8 +82,8 @@ Backend/Database/*.log
 # Локальные настройки с паролем от БД 
 Backend/appsettings.Development.json
 
-# Локальные настройки запуска 
-Backend/Properties/launchSettings.json
+# Стандартный безопасный профиль запуска, без секретов
+!Backend/Properties/launchSettings.json
 
 !Backend/*.csproj
 !Backend/*.sln

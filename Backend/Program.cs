@@ -10,9 +10,7 @@ using System.Linq;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// настройки подключения к бд
-// Пароль читается из appsettings.Development.json (у каждого компьютера свой).
-// Запасной вариант на случай отсутствия файла:
+// Строка подключения берётся из appsettings.Development.json или переменной среды.
 var connectionString = builder.Configuration.GetConnectionString("DefaultConnection")
     ?? Environment.GetEnvironmentVariable("AR_INVENTORY_DB_CONNECTION");
 if (string.IsNullOrWhiteSpace(connectionString))
