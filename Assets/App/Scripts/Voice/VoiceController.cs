@@ -16,6 +16,7 @@ public class VoiceController : MonoBehaviour
     private readonly Queue<string> pendingTexts = new Queue<string>();
     private readonly object queueLock = new object();
     private int restartInFrames = -1;
+    private volatile bool microphoneReserved;
 
     void Awake()
     {
@@ -114,8 +115,23 @@ public class VoiceController : MonoBehaviour
 
     public void StartListening()
     {
-        if (recognizer != null && intent != null)
+        if (!microphoneReserved && recognizer != null && intent != null)
             recognizer.Call("startListening", intent);
+    }
+
+    public void ReserveMicrophone(bool reserved)
+    {
+        if (microphoneReserved == reserved) return;
+        lock (queueLock)
+        {
+            microphoneReserved = reserved;
+            pendingTexts.Clear();
+            restartInFrames = reserved ? -1 : 20;
+        }
+#if UNITY_ANDROID && !UNITY_EDITOR
+        if (reserved)
+            RunOnUI(() => recognizer?.Call("cancel"));
+#endif
     }
 
     // ===== ВЫЗЫВАЮТСЯ С JAVA-ПОТОКА: только кладём в очередь, НИКАКОГО Unity-UI =====
@@ -125,6 +141,7 @@ public class VoiceController : MonoBehaviour
         {
             lock (queueLock)
             {
+                if (microphoneReserved) return;
                 pendingTexts.Enqueue(text);
                 restartInFrames = 20; // пауза ~0.3 c перед следующим прослушиванием
             }
@@ -132,15 +149,18 @@ public class VoiceController : MonoBehaviour
         else
         {
             lock (queueLock)
-                restartInFrames = 20;
+                if (!microphoneReserved) restartInFrames = 20;
         }
     }
 
     public void HandleError(int code)
     {
-        Debug.LogWarning($"[Voice] Ошибка распознавателя {code}, перезапуск");
         lock (queueLock)
+        {
+            if (microphoneReserved) return;
+            Debug.LogWarning($"[Voice] Ошибка распознавателя {code}, перезапуск");
             restartInFrames = 30;
+        }
     }
 
     public void ExtractAndHandle(AndroidJavaObject bundle)

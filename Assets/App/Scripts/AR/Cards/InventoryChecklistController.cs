@@ -13,6 +13,8 @@ public sealed class InventoryChecklistController : MonoBehaviour
     public static InventoryChecklistController Active { get; private set; }
     public static bool Exists => Active != null;
     public IReadOnlyList<string> VoiceItemNames => itemNames.Values.ToList();
+    public bool CanFinalize => !saving && !completed && statuses.Count > 0 &&
+        statuses.Values.All(value => value == "present" || value == "missing");
 
     private LocalCabinetProfile localCabinet;
     private InventoryCabinetResponse serverCabinet;
@@ -22,8 +24,12 @@ public sealed class InventoryChecklistController : MonoBehaviour
     private readonly Dictionary<long, string> itemNames = new();
     private TextMeshProUGUI message;
     private Transform content;
-    private bool building;
     private bool saving;
+    private bool completed;
+    private Button finishButton;
+    private ScrollRect checklistScroll;
+    private Button scrollUpButton;
+    private Button scrollDownButton;
 
     private void Start()
     {
@@ -35,7 +41,7 @@ public sealed class InventoryChecklistController : MonoBehaviour
         var canvas = GetComponentInChildren<Canvas>();
         if (canvas == null) { Debug.LogError("[Inventory] В карточке нет Canvas."); return; }
         var oldPanel = canvas.transform.Find("Panel");
-        if (oldPanel != null) Destroy(oldPanel.gameObject);
+        if (oldPanel != null) { oldPanel.gameObject.SetActive(false); Destroy(oldPanel.gameObject); }
         BuildShell(canvas.transform);
 
         if (!string.IsNullOrWhiteSpace(qrCode))
@@ -60,16 +66,21 @@ public sealed class InventoryChecklistController : MonoBehaviour
         // New() already creates a RectTransform. AddComponent would return null
         // because every GameObject can only have one Transform component.
         var scrollRect = scrollObject.GetComponent<RectTransform>();
-        scrollRect.anchorMin = new Vector2(.04f, .17f); scrollRect.anchorMax = new Vector2(.96f, .80f);
+        scrollRect.anchorMin = new Vector2(.04f, .17f); scrollRect.anchorMax = new Vector2(.84f, .80f);
         scrollRect.offsetMin = Vector2.zero; scrollRect.offsetMax = Vector2.zero;
         scrollObject.AddComponent<Image>().color = new Color(.14f, .17f, .23f, 1);
-        var scroll = scrollObject.AddComponent<ScrollRect>(); scroll.horizontal = false;
+        checklistScroll = scrollObject.AddComponent<ScrollRect>();
+        checklistScroll.horizontal = false;
+        checklistScroll.vertical = true;
+        checklistScroll.movementType = ScrollRect.MovementType.Clamped;
+        checklistScroll.inertia = false;
+        checklistScroll.scrollSensitivity = 35f;
 
         var viewport = New("Viewport", scrollObject.transform);
         var viewportRect = viewport.GetComponent<RectTransform>(); Stretch(viewportRect);
         viewport.AddComponent<Image>().color = Color.white;
         viewport.AddComponent<Mask>().showMaskGraphic = false;
-        scroll.viewport = viewportRect;
+        checklistScroll.viewport = viewportRect;
 
         var contentObject = New("Content", viewport.transform);
         content = contentObject.transform;
@@ -83,17 +94,39 @@ public sealed class InventoryChecklistController : MonoBehaviour
         var fitter = contentObject.AddComponent<ContentSizeFitter>();
         fitter.horizontalFit = ContentSizeFitter.FitMode.Unconstrained;
         fitter.verticalFit = ContentSizeFitter.FitMode.PreferredSize;
-        scroll.content = contentRect;
+        checklistScroll.content = contentRect;
+
+        scrollUpButton = AddButton(panel.transform, "▲  Вверх", new Color(.12f, .48f, .76f), () => ScrollChecklist(.24f));
+        SetScrollButtonRect(scrollUpButton.GetComponent<RectTransform>(), .86f, .975f, .64f, .79f);
+        scrollDownButton = AddButton(panel.transform, "▼  Вниз", new Color(.12f, .48f, .76f), () => ScrollChecklist(-.24f));
+        SetScrollButtonRect(scrollDownButton.GetComponent<RectTransform>(), .86f, .975f, .48f, .63f);
 
         var close = AddButton(panel.transform, "Закрыть", new Color(.30f, .34f, .41f), () => ARCardModeSelector.CloseCard(gameObject));
         var closeRect = close.GetComponent<RectTransform>();
         closeRect.anchorMin = new Vector2(.05f, .025f); closeRect.anchorMax = new Vector2(.31f, .145f);
         closeRect.offsetMin = Vector2.zero; closeRect.offsetMax = Vector2.zero;
 
-        var save = AddButton(panel.transform, "Отправить проверку", new Color(.05f, .62f, .28f), Save);
-        var saveRect = save.GetComponent<RectTransform>();
+        finishButton = AddButton(panel.transform, "Завершить проверку", new Color(.05f, .62f, .28f), OpenReport);
+        var saveRect = finishButton.GetComponent<RectTransform>();
         saveRect.anchorMin = new Vector2(.35f, .025f); saveRect.anchorMax = new Vector2(.95f, .145f);
         saveRect.offsetMin = Vector2.zero; saveRect.offsetMax = Vector2.zero;
+    }
+
+    private static void SetScrollButtonRect(RectTransform rect, float left, float right, float bottom, float top)
+    {
+        rect.anchorMin = new Vector2(left, bottom);
+        rect.anchorMax = new Vector2(right, top);
+        rect.offsetMin = Vector2.zero;
+        rect.offsetMax = Vector2.zero;
+    }
+
+    public void ScrollChecklistByVoice(bool up) => ScrollChecklist(up ? .24f : -.24f);
+
+    private void ScrollChecklist(float amount)
+    {
+        if (checklistScroll == null || checklistScroll.content == null || checklistScroll.viewport == null) return;
+        Canvas.ForceUpdateCanvases();
+        checklistScroll.verticalNormalizedPosition = Mathf.Clamp01(checklistScroll.verticalNormalizedPosition + amount);
     }
 
     private void OnCabinetReceived(InventoryCabinetResponse response)
@@ -139,7 +172,7 @@ public sealed class InventoryChecklistController : MonoBehaviour
     private void AddItem(long id, string name)
     {
         var row = New("Item_" + id, content.transform);
-        row.AddComponent<LayoutElement>().preferredHeight = 94;
+        row.AddComponent<LayoutElement>().preferredHeight = 72;
         row.AddComponent<Image>().color = new Color(.20f, .24f, .32f, 1);
         var label = AddText(row.transform, "Name", name, 22, new Vector2(0, 0), new Vector2(.55f, 1), new Vector2(12, 0), new Vector2(-8, 0), TextAlignmentOptions.Left);
         label.enableAutoSizing = true; label.fontSizeMin = 15; label.fontSizeMax = 22;
@@ -158,7 +191,7 @@ public sealed class InventoryChecklistController : MonoBehaviour
 
     public bool SetStatusByVoice(string phrase)
     {
-        if (statuses.Count == 0 || string.IsNullOrWhiteSpace(phrase)) return false;
+        if (completed || saving || statuses.Count == 0 || string.IsNullOrWhiteSpace(phrase)) return false;
         string command = phrase.ToLowerInvariant();
         bool present = command.Contains("есть") || command.Contains("имеется");
         bool missing = command.Contains("нет") || command.Contains("отсутствует");
@@ -171,13 +204,13 @@ public sealed class InventoryChecklistController : MonoBehaviour
         return true;
     }
 
-    public void SaveByVoice() => Save();
+    public void SaveByVoice() => OpenReport();
 
     private static int TokenOverlap(string item, string spoken) => spoken.Split(new[] { ' ', '-', '_' }, StringSplitOptions.RemoveEmptyEntries).Count(token => token.Length > 1 && item.IndexOf(token, StringComparison.OrdinalIgnoreCase) >= 0);
 
     private void SetStatus(long id, string value)
     {
-        if (!statuses.ContainsKey(id)) return;
+        if (completed || saving || !statuses.ContainsKey(id)) return;
         statuses[id] = value;
         var row = content != null ? content.Find("Item_" + id) : null;
         if (row == null) return;
@@ -187,53 +220,77 @@ public sealed class InventoryChecklistController : MonoBehaviour
         if (no != null) no.color = value == "missing" ? new Color(.95f, .22f, .20f) : new Color(.65f, .18f, .18f);
     }
 
-    private void Save()
+    private void OpenReport()
     {
-        if (saving) return;
-        if (statuses.Count == 0 || statuses.Values.Any(value => value != "present" && value != "missing"))
+        if (saving || completed) return;
+        if (!CanFinalize)
         { SetMessage("Отметьте каждый предмет: «Есть» или «Нет»."); return; }
+        InventoryReportCapture.Open(this);
+    }
 
+    public void SubmitReport(System.Collections.Generic.List<byte[]> photos, byte[] voice, Action<bool, string> onDone, Action<string> onProgress)
+    {
+        if (!CanFinalize || photos == null || photos.Count == 0 || voice == null)
+        {
+            onDone(false, "Отметьте каждый предмет и добавьте фото и голосовое сообщение.");
+            return;
+        }
+        if (!SessionManager.IsLoggedIn)
+        {
+            onDone(false, "Для отправки отчёта войдите в приложение.");
+            return;
+        }
         string runId = Guid.NewGuid().ToString("D");
         var payload = new InventoryRunSyncDto
         {
             clientRunId = runId,
             userId = SessionManager.UserId,
-            qrCode = qrCode,
+            qrCode = serverCabinet?.qrCode ?? qrCode,
             startedAt = startedAtUtc.ToUniversalTime().ToString("o"),
             completedAt = DateTime.UtcNow.ToString("o"),
-            items = statuses.Select(pair => new InventoryRunItemSyncDto { itemId = pair.Key, status = pair.Value, comment = "" }).ToList()
+            items = statuses.Select(pair => new InventoryRunItemSyncDto { itemId = pair.Key, status = pair.Value, comment = "" }).ToList(),
+            photoBase64 = Convert.ToBase64String(photos[0]),
+            photosBase64 = photos.ConvertAll(Convert.ToBase64String).ToArray(),
+            voiceBase64 = Convert.ToBase64String(voice)
         };
 
-        bool savedLocally = false;
-        if (localCabinet != null && LocalDatabase.Instance != null)
+        try
         {
-            try
-            {
-                var results = statuses.Select(pair => new LocalInventoryItemResult { itemId = pair.Key, itemName = itemNames[pair.Key], status = pair.Value }).ToList();
-                LocalDatabase.Instance.SaveInventoryRun(localCabinet.id, qrCode, results, startedAtUtc, runId);
-                savedLocally = true;
-            }
-            catch (Exception exception) { Debug.LogWarning("[Inventory] Локальная копия не создана: " + exception.Message); }
+            var database = LocalDatabase.Instance;
+            if (database == null || !database.IsReady)
+                throw new InvalidOperationException("Локальная база ещё не готова.");
+            database.SaveInventoryRun(payload, serverCabinet?.cabinetId ?? localCabinet.id,
+                serverCabinet?.qrCodeId ?? localCabinet.qr_code_id,
+                serverCabinet?.title ?? localCabinet?.title ?? qrCode, itemNames);
         }
-
-        if (!SessionManager.IsLoggedIn)
+        catch (Exception error)
         {
-            SetMessage(savedLocally ? "Сохранено на устройстве. Войдите в систему для отправки на сервер." : "Войдите в систему и повторите сохранение.");
+            Debug.LogWarning("[Inventory report] Не удалось сохранить: " + error.Message);
+            onDone(false, "Не удалось сохранить отчёт на устройстве. Повторите отправку.");
             return;
         }
+
+        completed = true;
         saving = true;
-        SetMessage("Отправляем результат на сервер…");
+        finishButton.interactable = false;
+        SetMessage("Отправляем отчёт на сервер…");
+        onProgress("Отправляем отчёт с фото и голосовым сообщением…");
         InventoryApiClient.SubmitInventory(this, payload,
             result =>
             {
                 saving = false;
-                if (savedLocally) LocalDatabase.Instance?.MarkInventoryRunSynced(runId);
-                SetMessage("Проверка сохранена на сервере и доступна администратору.");
+                try { LocalDatabase.Instance?.MarkInventoryRunSynced(runId); }
+                catch (Exception error) { Debug.LogWarning("[Inventory report] " + error.Message); }
+                const string message = "Отчёт с фото и голосовым сообщением доступен администратору.";
+                SetMessage(message);
+                onDone(true, message);
             },
             error =>
             {
                 saving = false;
-                SetMessage(savedLocally ? "Нет связи с сервером. Результат сохранён локально — синхронизируйте позже." : "Не отправлено: " + error);
+                const string message = "Отчёт и вложения сохранены на устройстве. Отправьте их через «Синхронизировать» в главном меню.";
+                SetMessage(message);
+                onDone(true, message);
                 Debug.LogWarning("[Inventory] Не удалось отправить проверку: " + error);
             });
     }

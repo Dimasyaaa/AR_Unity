@@ -7,6 +7,15 @@ using UnityEngine.UI;
 /// <summary>Selects one of the card prefabs explicitly listed on the scene's ObjectSpawner.</summary>
 public static class ARCardSpawnUtility
 {
+    private static ObjectSpawner activeSpawner;
+    private static GameObject selectedPrefab;
+
+    [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
+    private static void StartWithPlacementDisabled()
+    {
+        DisablePlacement();
+    }
+
     public static void AddPanelDepth(Image panelImage)
     {
         if (panelImage == null)
@@ -51,13 +60,19 @@ public static class ARCardSpawnUtility
             return false;
         }
 
-        if (FindExistingCard(cardPrefab) != null)
+        if (IsCardAlreadyPresent(cardPrefab))
         {
             Debug.LogWarning($"[AR Cards] Карточка «{cardPrefab.name}» уже размещена. Сначала удали её, затем добавь заново.");
             return false;
         }
 
+        if (activeSpawner != null) activeSpawner.objectSpawned -= OnObjectSpawned;
+        activeSpawner = spawner;
+        selectedPrefab = cardPrefab;
+        spawner.objectSpawned += OnObjectSpawned;
         spawner.SetSpawnObjectIndex(index);
+        var horizontalOnly = placementTrigger.GetType().GetProperty("requireHorizontalUpSurface");
+        horizontalOnly?.SetValue(placementTrigger, false);
         placementTrigger.enabled = true;
         HideObjectMenu();
         Debug.Log($"[AR Cards] Выбрана карточка «{cardPrefab.name}» ({index + 1}/{spawner.objectPrefabs.Count}). Коснитесь поверхности, чтобы разместить её.");
@@ -66,6 +81,9 @@ public static class ARCardSpawnUtility
 
     public static void DisablePlacement()
     {
+        if (activeSpawner != null) activeSpawner.objectSpawned -= OnObjectSpawned;
+        activeSpawner = null;
+        selectedPrefab = null;
         ObjectSpawner spawner = Object.FindAnyObjectByType<ObjectSpawner>();
         if (spawner == null) return;
 
@@ -96,16 +114,35 @@ public static class ARCardSpawnUtility
 
     private static Component FindExistingCard(GameObject prefab)
     {
-        if (prefab.GetComponent<CalculatorController>() != null)
-            return Object.FindAnyObjectByType<CalculatorController>();
-        if (prefab.TryGetComponent<ImageCardController>(out var imageCard))
+        var placedMarkers = Object.FindObjectsByType<ARPlacedCardMarker>(FindObjectsInactive.Include);
+        var marker = placedMarkers.FirstOrDefault(card => card.PrefabName == prefab.name);
+        if (marker != null) return marker;
+
+        if (prefab.GetComponentInChildren<CalculatorController>(true) != null)
+            return Object.FindAnyObjectByType<CalculatorController>(FindObjectsInactive.Include);
+        var imageCard = prefab.GetComponentInChildren<ImageCardController>(true);
+        if (imageCard != null)
             return Object.FindObjectsByType<ImageCardController>(FindObjectsInactive.Include)
                 .FirstOrDefault(card => card.CabinetViewOnly == imageCard.CabinetViewOnly);
-        if (prefab.GetComponent<InventoryChecklistController>() != null)
-            return Object.FindAnyObjectByType<InventoryChecklistController>();
-        if (prefab.GetComponent<WebCardController>() != null)
-            return Object.FindAnyObjectByType<WebCardController>();
+        if (prefab.GetComponentInChildren<InventoryChecklistController>(true) != null)
+            return Object.FindAnyObjectByType<InventoryChecklistController>(FindObjectsInactive.Include);
+        if (prefab.GetComponentInChildren<WebCardController>(true) != null)
+            return Object.FindAnyObjectByType<WebCardController>(FindObjectsInactive.Include);
 
         return null;
+    }
+
+    public static bool IsCardAlreadyPresent(GameObject prefab) =>
+        prefab != null && (FindExistingCard(prefab) != null || ARCardModeSelector.HasOverlay(prefab));
+
+    private static void OnObjectSpawned(GameObject instance)
+    {
+        if (instance != null && selectedPrefab != null)
+        {
+            var marker = instance.GetComponent<ARPlacedCardMarker>() ?? instance.AddComponent<ARPlacedCardMarker>();
+            marker.PrefabName = selectedPrefab.name;
+        }
+        DisablePlacement();
+        Debug.Log("[AR Cards] Карточка размещена. Режим размещения выключен; повторное создание заблокировано.");
     }
 }

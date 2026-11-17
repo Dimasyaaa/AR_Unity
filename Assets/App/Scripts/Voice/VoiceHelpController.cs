@@ -122,6 +122,7 @@ public sealed class VoiceHelpController : MonoBehaviour
         else
         {
             lines.Add("AR-СЦЕНА");
+            lines.Add("Съёмка: «камера», затем «сделай фото».");
             lines.Add("AR-сцена: «сканировать QR», «главное меню», «меню объектов», «отмена», «удалить объекты».");
             lines.Add("Карточки: «калькулятор», «вид шкафа», «инвентаризация», «веб». Чтобы убрать одну, скажите «закрой карточку» или назовите её тип: «закрой калькулятор», «закрой шкаф», «закрой инвентаризацию».");
             lines.Add("Размер: «увеличь карточку», «уменьши карточку», «сбрось размер»; можно назвать карточку, например «увеличь калькулятор».");
@@ -130,7 +131,7 @@ public sealed class VoiceHelpController : MonoBehaviour
         if (InventoryChecklistController.Active != null)
         {
             InventoryChecklistController inventory = InventoryChecklistController.Active;
-            lines.Add("Инвентаризация: «есть [предмет]», «нет [предмет]», «отправить проверку».");
+            lines.Add("Инвентаризация: «есть [предмет]», «нет [предмет]», «завершить проверку». Для отчёта сделайте фото и запишите голосовое сообщение. Запись останавливается кнопкой «Стоп».");
             if (inventory.VoiceItemNames.Count > 0)
             {
                 string numberedItems = string.Join("; ", inventory.VoiceItemNames.Select((name, index) => $"{index + 1}. {name}"));

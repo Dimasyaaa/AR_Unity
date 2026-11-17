@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using System.Data;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
@@ -7,6 +8,9 @@ using NpgsqlTypes;
 
 public static class InventoryApi
 {
+    private const int MaxReportPhotoBytes = 4 * 1024 * 1024;
+    private const int MaxReportVoiceBytes = 44 + 60 * 16000 * 2;
+
     public static IEndpointRouteBuilder MapInventoryApi(
         this IEndpointRouteBuilder endpoints,
         string connectionString)
@@ -567,9 +571,12 @@ public static class InventoryApi
             string userDepartment;
             string cabinetTitle;
             string qrCode;
+            bool hasMedia;
+            int photoCount;
             using (var command = new NpgsqlCommand(@"
                 SELECT r.id, r.client_run_id, r.started_at, r.completed_at,
-                       r.user_id, u.full_name, u.department, c.title, q.code
+                       r.user_id, u.full_name, u.department, c.title, q.code,
+                       EXISTS (SELECT 1 FROM inventory_run_media m WHERE m.inventory_run_id = r.id)
                 FROM inventory_runs r
                 JOIN users u ON u.id = r.user_id
                 JOIN cabinet_profiles c ON c.id = r.cabinet_id
@@ -589,6 +596,13 @@ public static class InventoryApi
                 userDepartment = reader.GetString(6);
                 cabinetTitle = reader.GetString(7);
                 qrCode = reader.GetString(8);
+                hasMedia = reader.GetBoolean(9);
+            }
+
+            using (var command = new NpgsqlCommand(@"SELECT CASE WHEN EXISTS (SELECT 1 FROM inventory_run_media WHERE inventory_run_id=@id) THEN 1 ELSE 0 END + (SELECT COUNT(*) FROM inventory_run_photos WHERE inventory_run_id=@id)", connection))
+            {
+                command.Parameters.AddWithValue("id", runId);
+                photoCount = Convert.ToInt32(command.ExecuteScalar());
             }
 
             var items = new List<object>();
@@ -609,12 +623,49 @@ public static class InventoryApi
             return Results.Ok(new
             {
                 id, clientRunId, startedAt, completedAt, userId, userFullName,
-                userDepartment, cabinetTitle, qrCode, items
+                userDepartment, cabinetTitle, qrCode, items,
+                photoUrl = hasMedia ? $"/api/admin/inventory/runs/{id}/media/photo" : null,
+                photoUrls = Enumerable.Range(0, photoCount).Select(index => $"/api/admin/inventory/runs/{id}/media/photo/{index}").ToArray(),
+                voiceUrl = hasMedia ? $"/api/admin/inventory/runs/{id}/media/voice" : null
             });
         })
         .WithTags("Admin: Inventory")
         .WithSummary("Подробности выбранной инвентаризации")
         .WithDescription("Показывает выбор сотрудника по каждому пункту чек-листа и его комментарий.")
+        .Produces(200)
+        .Produces(404);
+
+        endpoints.MapGet("/api/admin/inventory/runs/{runId:long}/media/photo/{index:int}", (long runId, int index, HttpContext context) =>
+        {
+            if (index < 0 || index > 4) return Results.NotFound();
+            using var connection = new NpgsqlConnection(connectionString);
+            connection.Open();
+            using var command = index == 0
+                ? new NpgsqlCommand("SELECT photo_jpeg FROM inventory_run_media WHERE inventory_run_id=@id", connection)
+                : new NpgsqlCommand("SELECT photo_jpeg FROM inventory_run_photos WHERE inventory_run_id=@id AND photo_index=@index", connection);
+            command.Parameters.AddWithValue("id", runId);
+            if (index > 0) command.Parameters.AddWithValue("index", index);
+            if (command.ExecuteScalar() is not byte[] bytes) return Results.NotFound();
+            context.Response.Headers.CacheControl = "private, no-store";
+            return Results.Bytes(bytes, "image/jpeg", enableRangeProcessing: true);
+        }).WithTags("Admin: Inventory").WithSummary("Фотография отчёта инвентаризации");
+
+        endpoints.MapGet("/api/admin/inventory/runs/{runId:long}/media/{kind}", (long runId, string kind, HttpContext context) =>
+        {
+            const string photoSql = "SELECT photo_jpeg FROM inventory_run_media WHERE inventory_run_id = @runId";
+            const string voiceSql = "SELECT voice_wav FROM inventory_run_media WHERE inventory_run_id = @runId";
+            if (kind != "photo" && kind != "voice") return Results.NotFound();
+
+            using var connection = new NpgsqlConnection(connectionString);
+            connection.Open();
+            using var command = new NpgsqlCommand(kind == "photo" ? photoSql : voiceSql, connection);
+            command.Parameters.AddWithValue("runId", runId);
+            if (command.ExecuteScalar() is not byte[] bytes) return Results.NotFound();
+            context.Response.Headers.CacheControl = "private, no-store";
+            return Results.Bytes(bytes, kind == "photo" ? "image/jpeg" : "audio/wav", enableRangeProcessing: true);
+        })
+        .WithTags("Admin: Inventory")
+        .WithSummary("Получить фото или голосовое сообщение инвентаризации")
         .Produces(200)
         .Produces(404);
 
@@ -712,6 +763,7 @@ public static class InventoryApi
         if (run.items.Any(item => item.itemId <= 0 || (item.status != "present" && item.status != "missing")))
             throw new ArgumentException("Проверка пропущена: для каждого предмета выберите «Есть» или «Нет».");
 
+        var media = ReadReportMedia(run);
         using var transaction = connection.BeginTransaction();
 
         using (var existingCommand = new NpgsqlCommand(
@@ -792,6 +844,7 @@ public static class InventoryApi
             INSERT INTO inventory_runs
                 (client_run_id, cabinet_id, user_id, qr_code_id, started_at, completed_at)
             VALUES (@clientRunId, @cabinetId, @userId, @qrCodeId, @startedAt, @completedAt)
+            ON CONFLICT (client_run_id) DO NOTHING
             RETURNING id
         ", connection, transaction))
         {
@@ -801,7 +854,29 @@ public static class InventoryApi
             insertRun.Parameters.AddWithValue("qrCodeId", qrCodeId);
             insertRun.Parameters.AddWithValue("startedAt", startedAt.UtcDateTime);
             insertRun.Parameters.AddWithValue("completedAt", completedAt.UtcDateTime);
-            inventoryRunId = Convert.ToInt64(insertRun.ExecuteScalar());
+            if (insertRun.ExecuteScalar() is not long insertedId)
+                return SaveRunResult.Duplicate;
+            inventoryRunId = insertedId;
+        }
+
+        if (media is { } attachments)
+        {
+            using var insertMedia = new NpgsqlCommand(@"
+                INSERT INTO inventory_run_media (inventory_run_id, photo_jpeg, voice_wav)
+                VALUES (@runId, @photo, @voice)
+            ", connection, transaction);
+            insertMedia.Parameters.AddWithValue("runId", inventoryRunId);
+            insertMedia.Parameters.AddWithValue("photo", NpgsqlDbType.Bytea, attachments.Photos[0]);
+            insertMedia.Parameters.AddWithValue("voice", NpgsqlDbType.Bytea, attachments.Voice);
+            insertMedia.ExecuteNonQuery();
+            for (int photoIndex = 1; photoIndex < attachments.Photos.Count; photoIndex++)
+            {
+                using var insertPhoto = new NpgsqlCommand(@"INSERT INTO inventory_run_photos (inventory_run_id, photo_index, photo_jpeg) VALUES (@runId, @photoIndex, @photo)", connection, transaction);
+                insertPhoto.Parameters.AddWithValue("runId", inventoryRunId);
+                insertPhoto.Parameters.AddWithValue("photoIndex", photoIndex);
+                insertPhoto.Parameters.Add("photo", NpgsqlDbType.Bytea).Value = attachments.Photos[photoIndex];
+                insertPhoto.ExecuteNonQuery();
+            }
         }
 
         foreach (var item in run.items)
@@ -837,6 +912,49 @@ public static class InventoryApi
 
         transaction.Commit();
         return SaveRunResult.Imported;
+    }
+
+    private static (List<byte[]> Photos, byte[] Voice)? ReadReportMedia(InventoryRunSyncItem run)
+    {
+        var encodedPhotos = run.photosBase64 is { Count: > 0 } ? run.photosBase64 :
+            string.IsNullOrEmpty(run.photoBase64) ? new List<string>() : new List<string> { run.photoBase64 };
+        if (encodedPhotos.Count > 5) throw new ArgumentException("В отчёте допускается не более 5 фотографий.");
+        if (encodedPhotos.Count == 0 && string.IsNullOrEmpty(run.voiceBase64))
+            return null; // Reports queued by older APKs contain only the checklist.
+
+        var photos = encodedPhotos.Select(encoded => DecodeAttachment(encoded, MaxReportPhotoBytes, "фото")).ToList();
+        if (photos.Sum(photo => (long)photo.Length) > 12L * 1024 * 1024)
+            throw new ArgumentException("Общий размер фотографий в отчёте не должен превышать 12 МБ.");
+        if (photos.Any(photo => photo.Length < 4 || photo[0] != 0xff || photo[1] != 0xd8 || photo[^2] != 0xff || photo[^1] != 0xd9))
+            throw new ArgumentException("Проверка пропущена: ожидается JPEG для каждой фотографии.");
+        byte[] voice = DecodeAttachment(run.voiceBase64, MaxReportVoiceBytes, "голосовое сообщение");
+        if (voice.Length < 46 || !voice.AsSpan(0, 4).SequenceEqual("RIFF"u8) ||
+            !voice.AsSpan(8, 8).SequenceEqual("WAVEfmt "u8) ||
+            !voice.AsSpan(36, 4).SequenceEqual("data"u8) ||
+            BinaryPrimitives.ReadInt32LittleEndian(voice.AsSpan(4)) != voice.Length - 8 ||
+            BinaryPrimitives.ReadInt32LittleEndian(voice.AsSpan(16)) != 16 ||
+            BinaryPrimitives.ReadInt16LittleEndian(voice.AsSpan(20)) != 1 ||
+            BinaryPrimitives.ReadInt16LittleEndian(voice.AsSpan(22)) != 1 ||
+            BinaryPrimitives.ReadInt32LittleEndian(voice.AsSpan(24)) != 16000 ||
+            BinaryPrimitives.ReadInt32LittleEndian(voice.AsSpan(28)) != 32000 ||
+            BinaryPrimitives.ReadInt16LittleEndian(voice.AsSpan(32)) != 2 ||
+            BinaryPrimitives.ReadInt16LittleEndian(voice.AsSpan(34)) != 16 ||
+            BinaryPrimitives.ReadInt32LittleEndian(voice.AsSpan(40)) != voice.Length - 44 ||
+            voice.Length % 2 != 0)
+            throw new ArgumentException("Проверка пропущена: ожидается голосовое сообщение WAV.");
+        return (photos, voice);
+    }
+
+    private static byte[] DecodeAttachment(string? encoded, int limit, string name)
+    {
+        if (string.IsNullOrWhiteSpace(encoded) || encoded.Length > ((limit + 2) / 3) * 4)
+            throw new ArgumentException($"Проверка пропущена: отсутствует или превышает допустимый размер вложение «{name}».");
+        byte[] bytes;
+        try { bytes = Convert.FromBase64String(encoded); }
+        catch (FormatException) { throw new ArgumentException($"Проверка пропущена: повреждено вложение «{name}»."); }
+        if (bytes.Length == 0 || bytes.Length > limit)
+            throw new ArgumentException($"Проверка пропущена: недопустимый размер вложения «{name}».");
+        return bytes;
     }
 
     private static IEnumerable<string> ExpandQr(string value)
@@ -898,6 +1016,9 @@ public sealed class InventoryRunSyncItem
     public string startedAt { get; set; } = string.Empty;
     public string completedAt { get; set; } = string.Empty;
     public List<InventoryRunSyncResult> items { get; set; } = new();
+    public string? photoBase64 { get; set; }
+    public List<string>? photosBase64 { get; set; }
+    public string? voiceBase64 { get; set; }
 }
 
 public sealed class InventoryRunSyncResult

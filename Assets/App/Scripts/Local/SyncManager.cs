@@ -110,8 +110,8 @@ namespace ArInventory.Local
                 }
             }
 
-            var pendingRuns = LocalDatabase.Instance.Connection.Table<LocalInventoryRun>()
-                .Where(run => !run.synced).ToList();
+            var pendingRuns = LocalDatabase.Instance.Connection.Query<LocalInventoryRun>(
+                "SELECT id FROM local_inventory_runs WHERE synced = 0 ORDER BY id");
             if (pendingRuns.Count == 0) { onDone?.Invoke(sessionSummary); yield break; }
 
             int importedRuns = 0;
@@ -122,8 +122,10 @@ namespace ArInventory.Local
             // Send records one by one. One obsolete local check (for example, a QR code
             // removed from the current reference database) must not prevent valid checks
             // from reaching the server.
-            foreach (var run in pendingRuns)
+            foreach (var pending in pendingRuns)
             {
+                var run = LocalDatabase.Instance.Connection.Find<LocalInventoryRun>(pending.id);
+                if (run == null || run.synced) continue;
                 if (!TryBuildRunDto(run, out var runDto, out var validationError))
                 {
                     rejectedRuns++;
@@ -141,7 +143,7 @@ namespace ArInventory.Local
                     req.SetRequestHeader("Content-Type", "application/json; charset=utf-8");
                     req.downloadHandler = new DownloadHandlerBuffer();
                     req.uploadHandler = new UploadHandlerRaw(Encoding.UTF8.GetBytes(JsonUtility.ToJson(runPayload)));
-                    req.timeout = 10;
+                    req.timeout = 45;
                     yield return req.SendWebRequest();
                     if (req.result != UnityWebRequest.Result.Success)
                     {
@@ -160,8 +162,7 @@ namespace ArInventory.Local
                         continue;
                     }
 
-                    run.synced = true;
-                    LocalDatabase.Instance.Connection.Update(run);
+                    LocalDatabase.Instance.MarkInventoryRunSynced(run.client_run_id);
                     importedRuns += result.imported;
                     duplicateRuns += result.duplicates;
                 }
@@ -187,6 +188,21 @@ namespace ArInventory.Local
             if (!Guid.TryParse(run.client_run_id, out _))
             {
                 error = "У локальной проверки повреждён идентификатор.";
+                return false;
+            }
+
+            if (!string.IsNullOrEmpty(run.report_payload))
+            {
+                try
+                {
+                    dto = JsonUtility.FromJson<InventoryRunSyncDto>(run.report_payload);
+                    if (dto != null && dto.clientRunId == run.client_run_id &&
+                        (dto.photosBase64 != null && dto.photosBase64.Length > 0 || !string.IsNullOrEmpty(dto.photoBase64)) &&
+                        !string.IsNullOrEmpty(dto.voiceBase64))
+                        return true;
+                }
+                catch (ArgumentException) { }
+                error = "Не удалось прочитать сохранённый отчёт с вложениями.";
                 return false;
             }
 
@@ -312,6 +328,9 @@ namespace ArInventory.Local
         public string startedAt;
         public string completedAt;
         public List<InventoryRunItemSyncDto> items;
+        public string photoBase64;
+        public string[] photosBase64;
+        public string voiceBase64;
     }
     [Serializable]
     public class InventoryRunItemSyncDto { public long itemId; public string status; public string comment; }

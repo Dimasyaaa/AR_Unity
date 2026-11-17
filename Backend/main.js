@@ -29,6 +29,8 @@ function toast(msg, type = 'success') {
 // Модальные окна
 function closeModal(id) {
   document.getElementById(id).classList.remove('open');
+  if (id === 'modal-inventory-run')
+    document.getElementById('inventory-run-media').querySelector('audio')?.pause();
 }
 
 // ОТДЕЛЫ (выпадающий список)
@@ -490,6 +492,17 @@ async function showInventoryRun(id) {
     document.getElementById('inventory-run-items').innerHTML = (run.items || []).map((item, index) => `
       <tr><td class="run-item-number">${index + 1}</td><td>${escapeHtml(item.itemName || '--')}</td><td><span class="badge ${item.status === 'present' ? 'badge-success' : 'badge-danger'}">${item.status === 'present' ? 'Есть' : 'Нет'}</span></td><td>${escapeHtml(item.comment || '—')}</td></tr>
     `).join('') || '<tr><td colspan="4" class="empty">В этой проверке нет пунктов.</td></tr>';
+    const media = document.getElementById('inventory-run-media');
+    const mediaUrl = `${API}/api/admin/inventory/runs/${Number(run.id)}/media`;
+    const photoUrls = run.photoUrls?.length ? run.photoUrls : (run.photoUrl ? [`${mediaUrl}/photo`] : []);
+    media.innerHTML = [
+      ...photoUrls.map((url, index) => `<figure><figcaption>Фото ${index + 1}</figcaption>
+        <a href="${API}${escapeHtml(url)}" target="_blank" rel="noopener"><img src="${API}${escapeHtml(url)}" alt="Фото ${index + 1} отчёта"></a>
+        </figure>`),
+      run.voiceUrl ? `<div><strong>Голосовое сообщение</strong>
+        <audio controls preload="none" src="${mediaUrl}/voice"></audio>
+        </div>` : ''
+    ].join('');
     document.getElementById('modal-inventory-run').classList.add('open');
   } catch (error) {
     toast('Ошибка загрузки проверки: ' + error.message, 'error');

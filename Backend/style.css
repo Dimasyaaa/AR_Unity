@@ -139,6 +139,11 @@ code { padding: 3px 7px; border: 1px solid #e5eaf0; border-radius: 6px; color: #
 .run-meta > div { display: grid; gap: 3px; padding: 11px 13px; border: 1px solid var(--border); border-radius: 10px; background: var(--card-soft); }
 .run-meta span { color: var(--muted); font-size: 11px; }
 .run-meta strong { font-size: 13px; font-weight: 650; overflow-wrap: anywhere; }
+.run-media:not(:empty) { display: grid; gap: 12px; margin-bottom: 18px; }
+.run-media > * { margin: 0; padding: 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--card-soft); }
+.run-media figcaption, .run-media strong { display: block; margin-bottom: 8px; font-weight: 650; }
+.run-media img { display: block; max-width: 100%; max-height: 340px; border-radius: 6px; }
+.run-media audio { display: block; width: 100%; }
 .run-items-table th:first-child, .run-items-table td:first-child { width: 54px; text-align: center; }
 .run-items-table td:nth-child(3) { width: 145px; }
 .run-item-number { color: var(--muted); font-weight: 750; }

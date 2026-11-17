@@ -73,6 +73,22 @@ public sealed class VoiceRouter : MonoBehaviour
         string phrase = raw.Trim();
         string normalized = Normalize(phrase);
         string scene = SceneManager.GetActiveScene().name;
+        if (InventoryReportCapture.Active is { } report && report != null)
+        {
+            if (Has(normalized, "сделать фото", "сделай фото", "снимок")) report.TakePhoto();
+            else if (Has(normalized, "записать голос", "запиши голос", "перезаписать")) report.RecordOrStop();
+            else if (Has(normalized, "прослушать")) report.PlayVoice();
+            else if (Has(normalized, "отправить отчёт", "отправить отчет", "отправь отчет", "отправь отчёт")) report.Send();
+            else if (Has(normalized, "назад", "закрыть камеру", "отмена")) report.Close();
+            return;
+        }
+        if (scene == "SampleScene" && (normalized == "камера" || normalized == "открой камеру" ||
+            normalized == "открыть камеру"))
+        {
+            var activeChecklist = InventoryChecklistController.Active;
+            InventoryReportCapture.Open(activeChecklist != null && activeChecklist.CanFinalize ? activeChecklist : null);
+            return;
+        }
         string action = null;
         bool containsDictatedText = IsTextEntryPhrase(normalized);
 
@@ -127,10 +143,21 @@ public sealed class VoiceRouter : MonoBehaviour
         InventoryChecklistController inventory = InventoryChecklistController.Active;
         if (inventory != null)
         {
+            if (Has(normalized, "вверх", "прокрути вверх", "список вверх", "листай вверх"))
+            {
+                inventory.ScrollChecklistByVoice(true);
+                Report("Список прокручен вверх");
+                return;
+            }
+            if (Has(normalized, "вниз", "прокрути вниз", "список вниз", "листай вниз"))
+            {
+                inventory.ScrollChecklistByVoice(false);
+                Report("Список прокручен вниз");
+                return;
+            }
             if (Has(normalized, "сохранить", "отправить проверку", "завершить проверку", "готово", "save"))
             {
                 inventory.SaveByVoice();
-                Report("Отправка инвентаризации");
                 return;
             }
             if (inventory.SetStatusByVoice(normalized))

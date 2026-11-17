@@ -1,5 +1,6 @@
 using TMPro;
 using System.Collections.Generic;
+using System.Linq;
 using UnityEngine;
 using UnityEngine.UI;
 
@@ -8,6 +9,12 @@ public static class ARCardModeSelector
 {
     private static GameObject dialog;
     private static readonly List<GameObject> overlays = new();
+
+    public static bool HasOverlay(GameObject prefab)
+    {
+        overlays.RemoveAll(item => item == null);
+        return overlays.Any(item => item.name == prefab.name + " (Overlay)");
+    }
 
     public static void Show(GameObject prefab)
     {
@@ -61,6 +68,11 @@ public static class ARCardModeSelector
     private static void ShowOverlay(GameObject prefab)
     {
         overlays.RemoveAll(item => item == null);
+        if (ARCardSpawnUtility.IsCardAlreadyPresent(prefab))
+        {
+            Debug.LogWarning($"[AR Cards] Окно «{GetDisplayName(prefab)}» уже открыто. Повторно добавить его нельзя.");
+            return;
+        }
         if (overlays.Count >= 3)
         {
             Debug.LogWarning("[AR Cards] Уже открыты три окна оверлея. Закройте одно, чтобы открыть ещё.");
@@ -184,7 +196,7 @@ public static class ARCardModeSelector
         else UnityEngine.Object.Destroy(card);
     }
 
-    private static void CloseDialog()
+    internal static void CloseDialog()
     {
         if (dialog != null) UnityEngine.Object.Destroy(dialog);
         dialog = null;

@@ -94,6 +94,7 @@ namespace ArInventory.Local
         public string started_at { get; set; }
         public string completed_at { get; set; }
         public bool synced { get; set; }
+        public string report_payload { get; set; }
     }
 
     [Table("local_inventory_run_items")]
@@ -109,11 +110,4 @@ namespace ArInventory.Local
         public string comment { get; set; }
     }
 
-    public class LocalInventoryItemResult
-    {
-        public long itemId;
-        public string itemName;
-        public string status;
-        public string comment;
-    }
 }

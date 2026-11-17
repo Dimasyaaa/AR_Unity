@@ -147,7 +147,7 @@ namespace ArInventory.Network
                 request.uploadHandler = new UploadHandlerRaw(bytes);
                 request.downloadHandler = new DownloadHandlerBuffer();
                 request.SetRequestHeader("Content-Type", "application/json; charset=utf-8");
-                request.timeout = 15;
+                request.timeout = 45;
                 yield return request.SendWebRequest();
                 if (request.result != UnityWebRequest.Result.Success)
                 { onError?.Invoke(ReadableError(request)); yield break; }

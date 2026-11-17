@@ -4,7 +4,7 @@
 		<meta charset="UTF-8">
 			<meta name="viewport" content="width=device-width, initial-scale=1.0">
 				<title>AR Inventory -- Админка</title>
-				<link rel="stylesheet" href="style.css?v=inventory-3">
+				<link rel="stylesheet" href="style.css?v=inventory-4">
 </head>
 	<body>
 		<div class="container">
@@ -250,6 +250,7 @@
 			<div class="modal modal-wide">
 				<div class="modal-title-row"><div><span class="eyebrow">ПРОВЕРКА ШКАФА</span><h3 id="inventory-run-title">Результат инвентаризации</h3></div><button class="icon-button" onclick="closeModal('modal-inventory-run')" aria-label="Закрыть">×</button></div>
 				<div id="inventory-run-meta" class="run-meta"></div>
+				<section id="inventory-run-media" class="run-media" aria-label="Вложения к проверке"></section>
 				<div class="table-wrap"><table class="run-items-table"><thead><tr><th>№</th><th>Предмет</th><th>Отметка сотрудника</th><th>Комментарий</th></tr></thead><tbody id="inventory-run-items"></tbody></table></div>
 				<div class="modal-actions"><button class="btn btn-secondary" onclick="closeModal('modal-inventory-run')">Закрыть</button></div>
 			</div>
@@ -257,6 +258,6 @@
 
 		<div class="toast" id="toast"></div>
 
-		<script src="main.js?v=inventory-3"></script>
+		<script src="main.js?v=inventory-4"></script>
 	</body>
 </html>

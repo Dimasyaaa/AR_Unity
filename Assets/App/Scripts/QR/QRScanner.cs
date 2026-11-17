@@ -21,7 +21,7 @@ public class QRScanner : MonoBehaviour
     [Header("Тестирование в Unity Editor")]
     //[SerializeField] private string editorTestQrCode = "DEMO-CABINET-002";
     //[SerializeField] private string editorTestQrCode = "DEMO-CABINET";
-    [SerializeField] private string editorTestQrCode = "test1";
+    [SerializeField] private string editorTestQrCode = "test2";
 
     private bool isScanning = false;
     private bool scanningFromAR;

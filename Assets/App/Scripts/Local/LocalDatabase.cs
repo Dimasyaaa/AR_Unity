@@ -99,8 +99,8 @@ namespace ArInventory.Local
             }
             catch (System.Exception e)
             {
-                Debug.LogError("[DB] Refresh failed, doing full copy: " + e.Message);
-                File.Copy(sourcePath, DatabasePath, overwrite: true);
+                Debug.LogError("[DB] Не удалось обновить справочники. Сохранена текущая база: " + e.Message);
+                return;
             }
 
             File.WriteAllText(markerPath, newHash);
@@ -123,20 +123,23 @@ namespace ArInventory.Local
             {
                 conn.CreateTable<LocalCabinetPhoto>();
                 conn.Execute("ATTACH DATABASE ? AS newdb", sourcePath);
-                conn.Execute("DELETE FROM users");
-                conn.Execute("INSERT INTO users SELECT * FROM newdb.users");
-                if (hasCabinetTables)
+                conn.RunInTransaction(() =>
                 {
-                    conn.Execute("DELETE FROM cabinet_checklist_items");
-                    conn.Execute("DELETE FROM cabinet_profiles");
-                    conn.Execute("INSERT INTO cabinet_profiles SELECT * FROM newdb.cabinet_profiles");
-                    conn.Execute("INSERT INTO cabinet_checklist_items SELECT * FROM newdb.cabinet_checklist_items");
-                }
-                conn.Execute("DELETE FROM cabinet_photos");
-                if (hasCabinetPhotoTable)
-                    conn.Execute("INSERT INTO cabinet_photos SELECT * FROM newdb.cabinet_photos");
-                conn.Execute("DELETE FROM qr_codes");
-                conn.Execute("INSERT INTO qr_codes SELECT * FROM newdb.qr_codes");
+                    conn.Execute("DELETE FROM users");
+                    conn.Execute("INSERT INTO users SELECT * FROM newdb.users");
+                    if (hasCabinetTables)
+                    {
+                        conn.Execute("DELETE FROM cabinet_checklist_items");
+                        conn.Execute("DELETE FROM cabinet_profiles");
+                        conn.Execute("INSERT INTO cabinet_profiles SELECT * FROM newdb.cabinet_profiles");
+                        conn.Execute("INSERT INTO cabinet_checklist_items SELECT * FROM newdb.cabinet_checklist_items");
+                    }
+                    conn.Execute("DELETE FROM cabinet_photos");
+                    if (hasCabinetPhotoTable)
+                        conn.Execute("INSERT INTO cabinet_photos SELECT * FROM newdb.cabinet_photos");
+                    conn.Execute("DELETE FROM qr_codes");
+                    conn.Execute("INSERT INTO qr_codes SELECT * FROM newdb.qr_codes");
+                });
                 conn.Execute("DETACH DATABASE newdb");
             }
         }
@@ -222,54 +225,33 @@ namespace ArInventory.Local
                 .ToList();
         }
 
-        public LocalInventoryRun SaveInventoryRun(
-            long cabinetId,
-            string qrValue,
-            List<LocalInventoryItemResult> results,
-            System.DateTime startedAtUtc,
-            string clientRunId = null)
+        public void SaveInventoryRun(InventoryRunSyncDto report, long cabinetId, long qrCodeId,
+            string cabinetTitle, IReadOnlyDictionary<long, string> itemNames)
         {
             if (!IsReady) throw new System.InvalidOperationException("Локальная база ещё не готова.");
-            if (!SessionManager.IsLoggedIn) throw new System.InvalidOperationException("Сначала войдите в приложение.");
-            if (results == null || results.Count == 0) throw new System.ArgumentException("Список предметов пуст.");
-            if (results.Any(item => item == null || (item.status != "present" && item.status != "missing")))
-                throw new System.ArgumentException("Отметьте для каждого предмета «Есть» или «Нет».");
-            if (results.Select(item => item.itemId).Distinct().Count() != results.Count)
-                throw new System.ArgumentException("В списке есть повторяющиеся предметы.");
-
-            var cabinet = FindCabinetByQr(qrValue);
-            if (cabinet == null || cabinet.id != cabinetId)
-                throw new System.InvalidOperationException("Данные шкафа не совпадают с текущим QR-кодом.");
-
-            var validIds = GetCabinetChecklist(cabinetId).Select(item => item.id).ToHashSet();
-            if (results.Any(item => !validIds.Contains(item.itemId)))
-                throw new System.ArgumentException("Список предметов устарел. Обновите данные шкафа.");
-
-            var now = System.DateTime.UtcNow;
             var run = new LocalInventoryRun
             {
-                client_run_id = string.IsNullOrWhiteSpace(clientRunId)
-                    ? System.Guid.NewGuid().ToString("D")
-                    : System.Guid.Parse(clientRunId).ToString("D"),
+                client_run_id = report.clientRunId,
                 cabinet_id = cabinetId,
-                qr_code_id = cabinet.qr_code_id,
-                user_id = SessionManager.UserId,
-                qr_code = ExpandQr(qrValue).FirstOrDefault() ?? qrValue,
-                started_at = startedAtUtc.ToUniversalTime().ToString("o", System.Globalization.CultureInfo.InvariantCulture),
-                completed_at = now.ToString("o", System.Globalization.CultureInfo.InvariantCulture),
-                synced = false
+                qr_code_id = qrCodeId,
+                user_id = report.userId,
+                qr_code = report.qrCode,
+                started_at = report.startedAt,
+                completed_at = report.completedAt,
+                synced = false,
+                report_payload = JsonUtility.ToJson(report)
             };
 
             db.RunInTransaction(() =>
             {
                 db.Insert(run);
-                foreach (var result in results)
+                foreach (var result in report.items)
                 {
                     db.Insert(new LocalInventoryRunItem
                     {
                         run_id = run.id,
                         checklist_item_id = result.itemId,
-                        item_name_snapshot = result.itemName ?? string.Empty,
+                        item_name_snapshot = itemNames[result.itemId],
                         status = result.status,
                         comment = result.comment ?? string.Empty
                     });
@@ -277,26 +259,21 @@ namespace ArInventory.Local
 
                 db.Insert(new LocalInventorySession
                 {
-                    user_id = SessionManager.UserId,
-                    qr_code_id = cabinet.qr_code_id,
+                    user_id = report.userId,
+                    qr_code_id = qrCodeId,
                     action = "inventory",
-                    action_time = now,
-                    comment = $"Инвентаризация «{cabinet.title}»: есть {results.Count(item => item.status == "present")}, нет {results.Count(item => item.status == "missing")}",
+                    action_time = System.DateTime.Parse(report.completedAt, null, System.Globalization.DateTimeStyles.RoundtripKind),
+                    comment = $"Инвентаризация «{cabinetTitle}»: есть {report.items.Count(item => item.status == "present")}, нет {report.items.Count(item => item.status == "missing")}",
                     synced = true
                 });
             });
 
-            return run;
         }
 
         public void MarkInventoryRunSynced(string clientRunId)
         {
             if (!IsReady || string.IsNullOrWhiteSpace(clientRunId)) return;
-            var run = db.Table<LocalInventoryRun>()
-                .FirstOrDefault(item => item.client_run_id == clientRunId);
-            if (run == null) return;
-            run.synced = true;
-            db.Update(run);
+            db.Execute("UPDATE local_inventory_runs SET synced = 1, report_payload = NULL WHERE client_run_id = ?", clientRunId);
         }
 
         public static List<string> ExpandQr(string value)
