@@ -5,30 +5,33 @@ using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
 
+/// <summary>
+/// Управляет фотографиями, голосовым комментарием и отправкой итогового отчёта инвентаризации.
+/// </summary>
 public sealed class InventoryReportCapture : MonoBehaviour
 {
     private const int MaxReportPhotos = 5;
     private const int MaxReportPhotoBytes = 12 * 1024 * 1024;
     public static InventoryReportCapture Active { get; private set; }
 
-    private readonly Color primary = new Color(.06f, .40f, .69f);
-    private readonly Color secondary = new Color(.17f, .23f, .31f);
     private InventoryChecklistController checklist;
     private Canvas canvas;
     private RectTransform safeArea;
     private Rect lastSafeArea;
     private Vector2Int lastScreenSize;
-    private RectTransform cameraControls;
-    private RectTransform reportControls;
+    private GameObject cameraControls;
+    private GameObject reportControls;
     private TextMeshProUGUI cameraStatus;
     private TextMeshProUGUI reportStatus;
     private TextMeshProUGUI recordLabel;
-    private UnityEngine.UI.Button shutter;
-    private UnityEngine.UI.Button closeReport;
-    private UnityEngine.UI.Button retake;
-    private UnityEngine.UI.Button record;
-    private UnityEngine.UI.Button play;
-    private UnityEngine.UI.Button send;
+    private Button cameraBack;
+    private Button shutter;
+    private Button addPhoto;
+    private Button closeReport;
+    private Button retake;
+    private Button record;
+    private Button play;
+    private Button send;
     private RawImage preview;
     private AspectRatioFitter previewAspect;
     private Texture2D image;
@@ -37,7 +40,6 @@ public sealed class InventoryReportCapture : MonoBehaviour
     private AudioClip voicePreview;
     private string recordingDevice;
     private float recordingStarted;
-    private byte[] photoJpeg;
     private readonly List<byte[]> reportPhotos = new List<byte[]>();
     private byte[] voiceWav;
     private bool takingPhoto;
@@ -46,85 +48,102 @@ public sealed class InventoryReportCapture : MonoBehaviour
     private bool playingVoice;
     private bool sending;
     private bool submitted;
+    private bool configured;
     private InventoryReportCameraFallback cameraFallback;
+
+    private void Awake()
+    {
+        BindSceneObjects();
+    }
 
     public static void Open(InventoryChecklistController owner = null)
     {
+        // Перед показом отчёта закрываем подсказки и режим установки AR-карточки.
         if (Active != null) return;
         VoiceHelpController.CloseIfOpen();
         ARCardModeSelector.CloseDialog();
         ARCardSpawnUtility.DisablePlacement();
-        var root = new GameObject("InventoryReportCamera", typeof(RectTransform), typeof(Canvas),
-            typeof(CanvasScaler), typeof(GraphicRaycaster), typeof(InventoryReportCapture));
-        Active = root.GetComponent<InventoryReportCapture>();
-        Active.checklist = owner;
-        Active.Build();
+        InventoryReportLauncher.OpenReport(owner);
     }
 
-    private void Build()
+    /// <summary>Подготавливает экземпляр префаба перед показом экрана камеры.</summary>
+    internal bool Initialize(InventoryChecklistController owner)
+    {
+        if (!configured) return false;
+        checklist = owner;
+        Active = this;
+        cameraControls.SetActive(true);
+        reportControls.SetActive(false);
+        cameraFallback.Hide();
+        UpdateSafeArea();
+        ShowCamera();
+        UpdateReportButtons();
+        return true;
+    }
+
+    private void BindSceneObjects()
     {
         canvas = GetComponent<Canvas>();
-        canvas.renderMode = RenderMode.ScreenSpaceOverlay;
-        canvas.sortingOrder = 12000;
-        var scaler = GetComponent<CanvasScaler>();
-        scaler.uiScaleMode = CanvasScaler.ScaleMode.ScaleWithScreenSize;
-        scaler.referenceResolution = new Vector2(720, 720);
-        scaler.screenMatchMode = CanvasScaler.ScreenMatchMode.Expand;
+        safeArea = transform.Find("SafeArea") as RectTransform;
+        if (safeArea == null)
+        {
+            Debug.LogError("[Отчёт] В префабе InventoryReportCard нет объекта SafeArea.");
+            enabled = false;
+            return;
+        }
 
-        var tapShield = NewRect("TapShield", transform);
-        Place(tapShield, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
-        tapShield.gameObject.AddComponent<UnityEngine.UI.Image>().color = Color.clear;
-        safeArea = NewRect("SafeArea", transform);
-        UpdateSafeArea();
+        Transform cameraPanel = safeArea.Find("CameraControls");
+        Transform cameraFooter = cameraPanel != null ? cameraPanel.Find("CameraFooter") : null;
+        Transform reportPanel = safeArea.Find("ReportControls");
+        Transform voiceActions = reportPanel != null ? reportPanel.Find("VoiceActions") : null;
+        Transform reportActions = reportPanel != null ? reportPanel.Find("ReportActions") : null;
+        Transform photoPreview = reportPanel != null ? reportPanel.Find("PhotoPreview/ScenePhoto") : null;
 
-        cameraControls = NewRect("CameraControls", safeArea);
-        Place(cameraControls, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
-        LabelBar(cameraControls, "Камера", new Vector2(0, 1), new Vector2(12, -56), new Vector2(-12, -12));
-        var footer = Box("CameraFooter", cameraControls, new Vector2(0, 0), new Vector2(1, 0),
-            new Vector2(12, 12), new Vector2(-12, 118));
-        cameraStatus = Label("CameraStatus", footer,
-            "В кадр попадут все видимые элементы сцены.", 22, new Vector2(0, .52f), Vector2.one);
-        AddButton(footer, "Назад", secondary, .02f, .35f, Close);
-        shutter = AddButton(footer, "Сделать фото", primary, .37f, .98f, TakePhoto);
+        cameraControls = cameraPanel != null ? cameraPanel.gameObject : null;
+        reportControls = reportPanel != null ? reportPanel.gameObject : null;
+        cameraStatus = cameraFooter != null ? cameraFooter.Find("CameraStatus")?.GetComponent<TextMeshProUGUI>() : null;
+        cameraBack = cameraFooter != null ? cameraFooter.Find("CameraBackButton")?.GetComponent<Button>() : null;
+        shutter = cameraFooter != null ? cameraFooter.Find("ShutterButton")?.GetComponent<Button>() : null;
+        reportStatus = reportPanel != null ? reportPanel.Find("ReportStatus")?.GetComponent<TextMeshProUGUI>() : null;
+        addPhoto = voiceActions != null ? voiceActions.Find("AddPhotoButton")?.GetComponent<Button>() : null;
+        record = voiceActions != null ? voiceActions.Find("RecordButton")?.GetComponent<Button>() : null;
+        play = voiceActions != null ? voiceActions.Find("PlayButton")?.GetComponent<Button>() : null;
+        closeReport = reportActions != null ? reportActions.Find("CloseReportButton")?.GetComponent<Button>() : null;
+        retake = reportActions != null ? reportActions.Find("RetakeButton")?.GetComponent<Button>() : null;
+        send = reportActions != null ? reportActions.Find("SendButton")?.GetComponent<Button>() : null;
+        preview = photoPreview != null ? photoPreview.GetComponent<RawImage>() : null;
+        previewAspect = photoPreview != null ? photoPreview.GetComponent<AspectRatioFitter>() : null;
+        recordLabel = record != null ? record.GetComponentInChildren<TextMeshProUGUI>(true) : null;
+        player = GetComponent<AudioSource>();
+        cameraFallback = GetComponent<InventoryReportCameraFallback>();
 
-        reportControls = Box("ReportControls", safeArea, Vector2.zero, Vector2.one,
-            new Vector2(12, 12), new Vector2(-12, -12));
-        LabelBar(reportControls, "Завершение инвентаризации", new Vector2(0, 1),
-            new Vector2(10, -50), new Vector2(-10, -8));
-        var previewArea = NewRect("PhotoPreview", reportControls);
-        Place(previewArea, new Vector2(.03f, .38f), new Vector2(.97f, 1),
-            Vector2.zero, new Vector2(0, -56));
-        var photoRect = NewRect("ScenePhoto", previewArea);
-        preview = photoRect.gameObject.AddComponent<RawImage>();
-        preview.raycastTarget = false;
-        previewAspect = photoRect.gameObject.AddComponent<AspectRatioFitter>();
-        previewAspect.aspectMode = AspectRatioFitter.AspectMode.FitInParent;
+        bool ready = canvas != null && cameraControls != null && reportControls != null &&
+            cameraStatus != null && cameraBack != null && shutter != null && reportStatus != null &&
+            addPhoto != null && record != null && play != null && recordLabel != null &&
+            closeReport != null && retake != null && send != null && preview != null &&
+            previewAspect != null && player != null && cameraFallback != null;
+        if (!ready)
+        {
+            Debug.LogError("[Отчёт] В префабе InventoryReportCard не хватает элементов или компонентов. Проверьте имена дочерних объектов.");
+            enabled = false;
+            return;
+        }
 
-        var statusRect = NewRect("ReportMessage", reportControls);
-        Place(statusRect, new Vector2(.03f, .27f), new Vector2(.97f, .38f), Vector2.zero, Vector2.zero);
-        reportStatus = Label("Status", statusRect, "", 22, Vector2.zero, Vector2.one);
-
-        var voiceRow = NewRect("VoiceActions", reportControls);
-        Place(voiceRow, new Vector2(0, .14f), new Vector2(1, .27f), Vector2.zero, Vector2.zero);
-        var addPhoto = AddButton(voiceRow, "Добавить фото", primary, .02f, .32f, ShowCamera, .08f, .92f);
-        record = AddButton(voiceRow, "Записать голос", primary, .34f, .66f, RecordOrStop, .08f, .92f);
-        recordLabel = record.GetComponentInChildren<TextMeshProUGUI>();
-        play = AddButton(voiceRow, "Прослушать", secondary, .68f, .98f, PlayVoice, .08f, .92f);
-        var actions = NewRect("ReportActions", reportControls);
-        Place(actions, Vector2.zero, new Vector2(1, .14f), Vector2.zero, Vector2.zero);
-        closeReport = AddButton(actions, "Назад", secondary, .03f, .28f, Close, .12f, .90f);
-        retake = AddButton(actions, "Переснять", secondary, .30f, .59f, ShowCamera, .12f, .90f);
-        send = AddButton(actions, "Отправить отчёт", primary, .61f, .97f, Send, .12f, .90f);
-        player = gameObject.AddComponent<AudioSource>();
-        player.playOnAwake = false;
-        cameraFallback = gameObject.AddComponent<InventoryReportCameraFallback>();
-        ShowCamera();
+        configured = true;
+        cameraBack.onClick.AddListener(Close);
+        shutter.onClick.AddListener(TakePhoto);
+        addPhoto.onClick.AddListener(ShowCamera);
+        record.onClick.AddListener(RecordOrStop);
+        play.onClick.AddListener(PlayVoice);
+        closeReport.onClick.AddListener(Close);
+        retake.onClick.AddListener(ShowCamera);
+        send.onClick.AddListener(Send);
     }
 
     private void Update()
     {
         UpdateSafeArea();
-        if (cameraControls != null && cameraControls.gameObject.activeSelf && !takingPhoto)
+        if (cameraControls != null && cameraControls.activeSelf && !takingPhoto)
             shutter.interactable = cameraFallback.CanCapture;
         if (playingVoice && !player.isPlaying) StopVoicePlayback();
         if (recording == null) return;
@@ -147,9 +166,10 @@ public sealed class InventoryReportCapture : MonoBehaviour
 
     private void ShowCamera()
     {
+        // В кадр попадёт весь экран приложения: чек-лист и размещённые AR-карточки.
         StopVoicePlayback();
-        reportControls.gameObject.SetActive(false);
-        cameraControls.gameObject.SetActive(true);
+        reportControls.SetActive(false);
+        cameraControls.SetActive(true);
         cameraStatus.text = checklist != null
             ? "Поместите чек-лист и нужные карточки в кадр."
             : "В кадр попадут все видимые элементы сцены.";
@@ -158,7 +178,8 @@ public sealed class InventoryReportCapture : MonoBehaviour
 
     public void TakePhoto()
     {
-        if (takingPhoto || !cameraControls.gameObject.activeSelf || !cameraFallback.CanCapture) return;
+        // Не запускаем несколько снимков одновременно и проверяем доступность камеры.
+        if (takingPhoto || !cameraControls.activeSelf || !cameraFallback.CanCapture) return;
         if (checklist != null && reportPhotos.Count >= MaxReportPhotos)
         {
             cameraStatus.text = $"В отчёт можно добавить не более {MaxReportPhotos} фотографий.";
@@ -182,6 +203,7 @@ public sealed class InventoryReportCapture : MonoBehaviour
 
     private IEnumerator CaptureFrame()
     {
+        // На один кадр скрываем экран камеры, чтобы элементы управления не попали в фото.
         canvas.enabled = false;
         yield return new WaitForEndOfFrame();
         string saved = null;
@@ -196,7 +218,6 @@ public sealed class InventoryReportCapture : MonoBehaviour
             }
             if (image != null) Destroy(image);
             image = captured;
-            photoJpeg = jpeg;
             if (checklist != null)
             {
                 int totalBytes = jpeg.Length;
@@ -223,22 +244,22 @@ public sealed class InventoryReportCapture : MonoBehaviour
             cameraStatus.text = saved;
             Destroy(image);
             image = null;
-            photoJpeg = null;
             yield break;
         }
 
         cameraFallback.Hide();
         preview.texture = image;
         previewAspect.aspectRatio = image.width / (float)image.height;
-        cameraControls.gameObject.SetActive(false);
-        reportControls.gameObject.SetActive(true);
+        cameraControls.SetActive(false);
+        reportControls.SetActive(true);
         reportStatus.text = saved + $"\nФото в отчёте: {reportPhotos.Count}. Добавьте ещё снимки или запишите голос.";
         UpdateReportButtons();
     }
 
     public void RecordOrStop()
     {
-        if (!reportControls.gameObject.activeSelf || sending || submitted || startingRecording) return;
+        // Повторное нажатие на кнопку завершает текущую запись.
+        if (!reportControls.activeSelf || sending || submitted || startingRecording) return;
         if (recording != null)
         {
             StopRecording(Microphone.GetPosition(recordingDevice));
@@ -263,6 +284,7 @@ public sealed class InventoryReportCapture : MonoBehaviour
 
     private IEnumerator StartRecording()
     {
+        // Даём Android время выдать микрофон после запроса разрешения.
         reportStatus.text = "Подключаем микрофон…";
         yield return new WaitForSecondsRealtime(.35f);
         if (!startingRecording) yield break;
@@ -289,6 +311,7 @@ public sealed class InventoryReportCapture : MonoBehaviour
 
     private void StopRecording(int frames)
     {
+        // Завершаем запись, проверяем её длительность и кодируем WAV для API.
         try
         {
             Microphone.End(recordingDevice);
@@ -331,7 +354,8 @@ public sealed class InventoryReportCapture : MonoBehaviour
 
     public void PlayVoice()
     {
-        if (voicePreview == null || IsRecording || sending || !reportControls.gameObject.activeSelf) return;
+        // Проигрывание использует готовую копию записи и временно резервирует микрофон.
+        if (voicePreview == null || IsRecording || sending || !reportControls.activeSelf) return;
         if (playingVoice) { StopVoicePlayback(); return; }
         SetMicrophoneReserved(true);
         playingVoice = true;
@@ -349,6 +373,7 @@ public sealed class InventoryReportCapture : MonoBehaviour
 
     public void Send()
     {
+        // Отправка требует хотя бы одного фото, голосового комментария и активного чек-листа.
         if (sending || submitted || IsRecording || reportPhotos.Count == 0 || voiceWav == null || checklist == null)
             return;
         StopVoicePlayback();
@@ -368,12 +393,14 @@ public sealed class InventoryReportCapture : MonoBehaviour
 
     public void Close()
     {
+        // Не закрываем экран, пока снимок или отправка ещё выполняются.
         if (sending || takingPhoto) return;
         Destroy(gameObject);
     }
 
     private void UpdateReportButtons()
     {
+        // Доступность кнопок зависит от текущего этапа заполнения отчёта.
         record.interactable = !startingRecording && !sending && !submitted;
         recordLabel.text = recording != null ? "Стоп" : voiceWav != null ? "Перезаписать" : "Записать голос";
         closeReport.interactable = !sending;
@@ -403,72 +430,17 @@ public sealed class InventoryReportCapture : MonoBehaviour
 
     private void UpdateSafeArea()
     {
+        // Пересчитываем безопасную область после смены ориентации или размера экрана.
         var size = new Vector2Int(Screen.width, Screen.height);
         var area = Screen.safeArea;
         if (size == lastScreenSize && area == lastSafeArea) return;
         if (size.x <= 0 || size.y <= 0) return;
         lastScreenSize = size;
         lastSafeArea = area;
-        Place(safeArea, new Vector2(area.xMin / size.x, area.yMin / size.y),
-            new Vector2(area.xMax / size.x, area.yMax / size.y), Vector2.zero, Vector2.zero);
+        safeArea.anchorMin = new Vector2(area.xMin / size.x, area.yMin / size.y);
+        safeArea.anchorMax = new Vector2(area.xMax / size.x, area.yMax / size.y);
+        safeArea.offsetMin = Vector2.zero;
+        safeArea.offsetMax = Vector2.zero;
     }
 
-    private static RectTransform NewRect(string name, Transform parent)
-    {
-        var item = new GameObject(name, typeof(RectTransform));
-        item.transform.SetParent(parent, false);
-        return (RectTransform)item.transform;
-    }
-
-    private static void Place(RectTransform rect, Vector2 min, Vector2 max, Vector2 offsetMin, Vector2 offsetMax)
-    {
-        rect.anchorMin = min;
-        rect.anchorMax = max;
-        rect.offsetMin = offsetMin;
-        rect.offsetMax = offsetMax;
-    }
-
-    private static RectTransform Box(string name, Transform parent, Vector2 min, Vector2 max, Vector2 offsetMin, Vector2 offsetMax)
-    {
-        var rect = NewRect(name, parent);
-        Place(rect, min, max, offsetMin, offsetMax);
-        rect.gameObject.AddComponent<UnityEngine.UI.Image>().color = new Color(.06f, .09f, .14f, .94f);
-        return rect;
-    }
-
-    private static void LabelBar(Transform parent, string title, Vector2 anchor, Vector2 min, Vector2 max)
-    {
-        var bar = Box("Header", parent, anchor, new Vector2(1, anchor.y), min, max);
-        Label("Title", bar, title, 26, Vector2.zero, Vector2.one).fontStyle = FontStyles.Bold;
-    }
-
-    private static TextMeshProUGUI Label(string name, Transform parent, string value, float size, Vector2 min, Vector2 max)
-    {
-        var rect = NewRect(name, parent);
-        Place(rect, min, max, new Vector2(6, 0), new Vector2(-6, 0));
-        var label = rect.gameObject.AddComponent<TextMeshProUGUI>();
-        label.text = value;
-        label.fontSize = size;
-        label.enableAutoSizing = true;
-        label.fontSizeMin = 13;
-        label.fontSizeMax = size;
-        label.alignment = TextAlignmentOptions.Center;
-        label.color = Color.white;
-        label.raycastTarget = false;
-        return label;
-    }
-
-    private static UnityEngine.UI.Button AddButton(Transform parent, string title, Color color, float left, float right,
-        UnityEngine.Events.UnityAction onClick, float bottom = .10f, float top = .52f)
-    {
-        var rect = NewRect(title, parent);
-        Place(rect, new Vector2(left, bottom), new Vector2(right, top), Vector2.zero, Vector2.zero);
-        var background = rect.gameObject.AddComponent<UnityEngine.UI.Image>();
-        background.color = color;
-        var button = rect.gameObject.AddComponent<UnityEngine.UI.Button>();
-        button.targetGraphic = background;
-        button.onClick.AddListener(onClick);
-        Label("Label", rect, title, 24, Vector2.zero, Vector2.one);
-        return button;
-    }
 }

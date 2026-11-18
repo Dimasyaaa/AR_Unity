@@ -8,6 +8,7 @@ using UnityEngine.Networking;
 
 namespace ArInventory.Network
 {
+    /// <summary>Данные шкафа, полученные от API.</summary>
     [Serializable]
     public sealed class InventoryCabinetResponse
     {
@@ -22,6 +23,7 @@ namespace ArInventory.Network
         public InventoryCabinetItem[] items;
     }
 
+    /// <summary>Описание одной фотографии или листа шкафа из ответа API.</summary>
     [Serializable]
     public sealed class InventoryCabinetPhoto
     {
@@ -31,6 +33,7 @@ namespace ArInventory.Network
         public string photoUrl;
     }
 
+    /// <summary>Пункт чек-листа шкафа из ответа API.</summary>
     [Serializable]
     public sealed class InventoryCabinetItem
     {
@@ -40,13 +43,18 @@ namespace ArInventory.Network
         public int sortOrder;
     }
 
-    /// <summary>Small HTTP bridge for cabinet data, gallery photos and live inventory submission.</summary>
+    /// <summary>
+    /// Общая точка связи приложения с сервером инвентаризации.
+    /// Загружает шкаф и его фотографии, а также отправляет результат проверки.
+    /// </summary>
     public static class InventoryApiClient
     {
         private const string BaseAddressKey = "ArInventory.ApiBaseUrl";
         private static string lastLoggedBaseUrl;
 
-        public static string BaseUrl
+        // Используется только этим клиентом: адрес выбирается из сохранённой настройки
+        // или из адресов по умолчанию для Unity Editor и Android.
+        private static string BaseUrl
         {
             get
             {
@@ -57,10 +65,9 @@ namespace ArInventory.Network
                 {
                     saved = saved.Trim().TrimEnd('/');
 
-                    // PlayerPrefs survives app updates. A previously selected USB address
-                    // (127.0.0.1) points back to the phone after the cable/reverse tunnel is gone.
-                    // Keep USB available for an explicit Sync action, but use Wi-Fi for the
-                    // regular cabinet/photo/checklist API calls on Android.
+                    // Сохранённая настройка переживает обновление приложения. Если USB-туннель
+                    // уже отключён, loopback-адрес указывает на сам телефон, поэтому обычные
+                    // запросы к шкафам переключаем на Wi-Fi. USB остаётся доступен для синхронизации.
                     resolved = Application.platform == RuntimePlatform.Android && IsLoopback(saved)
                         ? SyncManager.WIFI_URL
                         : saved;
@@ -80,24 +87,28 @@ namespace ArInventory.Network
             }
         }
 
+        /// <summary>Запрашивает состав шкафа и передаёт распознанный ответ вызывающему компоненту.</summary>
         public static void GetCabinet(MonoBehaviour runner, string qrCode,
             Action<InventoryCabinetResponse> onSuccess, Action<string> onError)
         {
             runner.StartCoroutine(GetCabinetRoutine(qrCode, onSuccess, onError));
         }
 
+        /// <summary>Загружает изображение заданного листа шкафа.</summary>
         public static void GetPhoto(MonoBehaviour runner, string qrCode, int pageNumber,
             Action<Texture2D> onSuccess, Action<string> onError)
         {
             runner.StartCoroutine(GetPhotoRoutine(qrCode, pageNumber, onSuccess, onError));
         }
 
+        /// <summary>Отправляет завершённую инвентаризацию на сервер.</summary>
         public static void SubmitInventory(MonoBehaviour runner, InventoryRunSyncDto run,
             Action<InventoryRunsSyncResult> onSuccess, Action<string> onError)
         {
             runner.StartCoroutine(SubmitRoutine(run, onSuccess, onError));
         }
 
+        /// <summary>Сохраняет выбранный адрес API, например адрес USB- или Wi-Fi-подключения.</summary>
         public static void RememberBaseUrl(string baseUrl)
         {
             if (string.IsNullOrWhiteSpace(baseUrl)) return;
@@ -105,6 +116,7 @@ namespace ArInventory.Network
             PlayerPrefs.Save();
         }
 
+        /// <summary>Выполняет HTTP-запрос состава шкафа и проверяет ответ сервера.</summary>
         private static IEnumerator GetCabinetRoutine(string qrCode,
             Action<InventoryCabinetResponse> onSuccess, Action<string> onError)
         {
@@ -123,6 +135,7 @@ namespace ArInventory.Network
             }
         }
 
+        /// <summary>Выполняет HTTP-запрос фотографии и преобразует ответ в текстуру Unity.</summary>
         private static IEnumerator GetPhotoRoutine(string qrCode, int pageNumber,
             Action<Texture2D> onSuccess, Action<string> onError)
         {
@@ -137,6 +150,7 @@ namespace ArInventory.Network
             }
         }
 
+        /// <summary>Упаковывает одну проверку в формат пакетной синхронизации и отправляет её.</summary>
         private static IEnumerator SubmitRoutine(InventoryRunSyncDto run,
             Action<InventoryRunsSyncResult> onSuccess, Action<string> onError)
         {
@@ -165,6 +179,7 @@ namespace ArInventory.Network
             }
         }
 
+        /// <summary>Добавляет к сетевой ошибке адрес сервера и текст ответа, если он есть.</summary>
         private static string ReadableError(UnityWebRequest request)
         {
             var serverMessage = request.downloadHandler != null ? request.downloadHandler.text : string.Empty;
@@ -177,6 +192,7 @@ namespace ArInventory.Network
                 : $"{request.error} (API: {target}): {serverMessage}";
         }
 
+        /// <summary>Проверяет, указывает ли сохранённый адрес на это же устройство.</summary>
         private static bool IsLoopback(string address)
         {
             return Uri.TryCreate(address, UriKind.Absolute, out var uri) && uri.IsLoopback;

@@ -2,10 +2,11 @@ using UnityEngine;
 using UnityEngine.Events;
 using UnityEngine.UI;
 
-/// <summary>Reusable button behavior: assign a card prefab and it will be registered with the AR spawner automatically.</summary>
+/// <summary>Связывает кнопку меню с префабом AR-карточки.</summary>
 [RequireComponent(typeof(Button))]
 public class ARCardButtonHook : MonoBehaviour
 {
+    /// <summary>Префаб, который будет выбран нажатием или голосовой командой.</summary>
     [SerializeField] private GameObject cardPrefab;
 
     private Button button;
@@ -16,9 +17,8 @@ public class ARCardButtonHook : MonoBehaviour
 
         for (int i = 0; i < button.onClick.GetPersistentEventCount(); i++)
         {
-            // Ignore the template's old numeric selection callback if this button
-            // was duplicated from a legacy object-menu entry. Preserve UI callbacks
-            // such as showing this button's selection marker.
+            // Отключаем старый выбор по номеру, оставляя другие события кнопки,
+            // например показ маркера выбранного пункта.
             if (button.onClick.GetPersistentMethodName(i) == "SetObjectToSpawn")
                 button.onClick.SetPersistentListenerState(i, UnityEventCallState.Off);
         }
@@ -37,4 +37,7 @@ public class ARCardButtonHook : MonoBehaviour
     {
         ARCardModeSelector.Show(cardPrefab);
     }
+
+    /// <summary>Выбирает эту карточку по голосовой команде.</summary>
+    public void SelectFromVoice() => OnPressed();
 }

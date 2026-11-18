@@ -8,17 +8,19 @@ using UnityEngine.Networking;
 
 namespace ArInventory.Local
 {
-    // Отправляет несинхронизированные локальные сессии на сервер.
+    /// <summary>Отправляет локальный журнал и завершённые инвентаризации на сервер.</summary>
     public class SyncManager : MonoBehaviour
     {
+        /// <summary>Единственный активный компонент синхронизации.</summary>
         public static SyncManager Instance { get; private set; }
 
-        // USB: телефон подключён кабелем и выполнена команда `adb reverse tcp:8000 tcp:8000`
+        /// <summary>Адрес USB-туннеля после выполнения adb reverse на компьютере.</summary>
         public const string USB_URL = "http://127.0.0.1:8000";
 
-        // Wi-Fi: локальный IP компьютера
+        /// <summary>Адрес API компьютера в локальной Wi-Fi-сети.</summary>
         public const string WIFI_URL = "http://192.168.0.51:8000";
 
+        /// <summary>Оставляет один экземпляр компонента между переходами сцен.</summary>
         private void Awake()
         {
             if (Instance != null && Instance != this) { Destroy(gameObject); return; }
@@ -26,6 +28,7 @@ namespace ArInventory.Local
             DontDestroyOnLoad(gameObject);
         }
 
+        /// <summary>Возвращает текущий компонент или создаёт его при необходимости.</summary>
         public static SyncManager GetOrCreate()
         {
             if (Instance != null) return Instance;
@@ -34,11 +37,13 @@ namespace ArInventory.Local
             return Instance;
         }
 
+        /// <summary>Начинает фоновую синхронизацию по выбранному адресу API.</summary>
         public void SyncNow(string baseUrl, Action<string> onDone)
         {
             StartCoroutine(SyncRoutine(baseUrl, onDone));
         }
 
+        /// <summary>Отправляет обычные события журнала, затем по одному передаёт сохранённые проверки.</summary>
         private IEnumerator SyncRoutine(string baseUrl, Action<string> onDone)
         {
             if (LocalDatabase.Instance == null || !LocalDatabase.Instance.IsReady)
@@ -53,6 +58,7 @@ namespace ArInventory.Local
             }
             Debug.Log($"[Sync] Синхронизация через {baseUrl}");
 
+            // Сначала отправляем обычные события: вход, сканирование QR и расчёты.
             var unsynced = LocalDatabase.Instance.Connection
                 .Table<LocalInventorySession>()
                 .Where(s => !s.synced)
@@ -110,6 +116,7 @@ namespace ArInventory.Local
                 }
             }
 
+            // Отдельно отправляем отчёты инвентаризации вместе с сохранёнными фото и голосом.
             var pendingRuns = LocalDatabase.Instance.Connection.Query<LocalInventoryRun>(
                 "SELECT id FROM local_inventory_runs WHERE synced = 0 ORDER BY id");
             if (pendingRuns.Count == 0) { onDone?.Invoke(sessionSummary); yield break; }
@@ -119,9 +126,7 @@ namespace ArInventory.Local
             int rejectedRuns = 0;
             string firstRejection = null;
 
-            // Send records one by one. One obsolete local check (for example, a QR code
-            // removed from the current reference database) must not prevent valid checks
-            // from reaching the server.
+            // Отправляем проверки по одной: устаревшая запись не должна задерживать остальные.
             foreach (var pending in pendingRuns)
             {
                 var run = LocalDatabase.Instance.Connection.Find<LocalInventoryRun>(pending.id);
@@ -174,6 +179,7 @@ namespace ArInventory.Local
             onDone?.Invoke($"{sessionSummary}. {inventorySummary}");
         }
 
+        /// <summary>Проверяет старый локальный отчёт и собирает DTO, понятный текущему API.</summary>
         private static bool TryBuildRunDto(LocalInventoryRun run, out InventoryRunSyncDto dto, out string error)
         {
             dto = null;
@@ -284,6 +290,7 @@ namespace ArInventory.Local
             return true;
         }
 
+        /// <summary>Формирует читаемое сообщение о сетевой ошибке и адресе сервера.</summary>
         private static string FormatRequestError(UnityWebRequest request, string baseUrl)
         {
             var detail = request.downloadHandler != null ? request.downloadHandler.text : string.Empty;
@@ -293,15 +300,18 @@ namespace ArInventory.Local
             return $"{result} (API: {baseUrl})";
         }
 
+        /// <summary>Выбирает USB для редактора и Wi-Fi для установленного приложения.</summary>
         private static string InventoryApiDefaultUrl()
         {
             return Application.isEditor ? USB_URL : WIFI_URL;
         }
     }
 
+    /// <summary>Пакет обычных событий локального журнала.</summary>
     [Serializable]
     public class SyncPayload { public List<SyncDto> items = new List<SyncDto>(); }
 
+    /// <summary>Одно событие журнала в формате API.</summary>
     [Serializable]
     public class SyncDto
     {
@@ -314,11 +324,15 @@ namespace ArInventory.Local
         public string department;
     }
 
+    /// <summary>Счётчики обработки обычных событий сервером.</summary>
     [Serializable]
     public class SyncResult { public int imported; public int skipped; }
 
+    /// <summary>Пакет завершённых проверок для API.</summary>
     [Serializable]
     public class InventoryRunsSyncPayload { public List<InventoryRunSyncDto> items = new List<InventoryRunSyncDto>(); }
+
+    /// <summary>Проверка инвентаризации вместе с необязательными медиа-вложениями.</summary>
     [Serializable]
     public class InventoryRunSyncDto
     {
@@ -332,8 +346,11 @@ namespace ArInventory.Local
         public string[] photosBase64;
         public string voiceBase64;
     }
+    /// <summary>Результат одного пункта чек-листа в запросе синхронизации.</summary>
     [Serializable]
     public class InventoryRunItemSyncDto { public long itemId; public string status; public string comment; }
+
+    /// <summary>Результат обработки пакета проверок сервером.</summary>
     [Serializable]
     public class InventoryRunsSyncResult
     {

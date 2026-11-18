@@ -6,7 +6,7 @@ using UnityEngine.XR.Interaction.Toolkit;
 using UnityEngine.XR.Interaction.Toolkit.Interactables;
 using UnityEngine.XR.Interaction.Toolkit.Transformers;
 
-/// <summary>Enforces one spawned instance per card type, including the template's built-in spawn menu.</summary>
+/// <summary>Ограничивает число экземпляров карточек и настраивает размещённый AR-объект.</summary>
 public sealed class ARCardSpawnGuard : MonoBehaviour
 {
     private ObjectSpawner spawner;
@@ -14,6 +14,7 @@ public sealed class ARCardSpawnGuard : MonoBehaviour
     [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
     private static void Install()
     {
+        // Подключаем защиту к штатному спавнеру шаблона, не требуя ручной настройки сцены.
         var currentSpawner = Object.FindAnyObjectByType<ObjectSpawner>();
         if (currentSpawner != null && currentSpawner.GetComponent<ARCardSpawnGuard>() == null)
             currentSpawner.gameObject.AddComponent<ARCardSpawnGuard>();
@@ -37,6 +38,7 @@ public sealed class ARCardSpawnGuard : MonoBehaviour
         int index = spawner.spawnOptionIndex;
         if (index < 0 || index >= spawner.objectPrefabs.Count) return;
         string prefabName = spawner.objectPrefabs[index].name;
+        // Проверяем и неактивные объекты: выключенная карточка тоже считается уже размещённой.
         bool duplicate = Object.FindObjectsByType<ARPlacedCardMarker>(FindObjectsInactive.Include)
             .Any(marker => marker != null && marker.PrefabName == prefabName && marker.gameObject != instance);
         if (duplicate)
@@ -55,6 +57,7 @@ public sealed class ARCardSpawnGuard : MonoBehaviour
         ARCardSpawnUtility.DisablePlacement();
     }
 
+    /// <summary>Включает перетаскивание, поворот и масштабирование карточки средствами XR.</summary>
     private static void EnableXRManipulation(GameObject card)
     {
         var body = card.GetComponent<Rigidbody>() ?? card.AddComponent<Rigidbody>();
@@ -76,6 +79,7 @@ public sealed class ARCardSpawnGuard : MonoBehaviour
         grab.AddMultipleGrabTransformer(transformer);
     }
 
+    /// <summary>Поворачивает содержимое карточки к пользователю с учётом пола или стены.</summary>
     private static void OrientCanvasesToPlacementSurface(GameObject instance)
     {
         Vector3 surfaceNormal = instance.transform.up.normalized;

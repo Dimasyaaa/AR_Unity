@@ -3,7 +3,10 @@ using UnityEngine;
 using UnityEngine.UI;
 using UnityEngine.XR.Interaction.Toolkit.Interactables;
 
-/// <summary>Button behavior for pinning an AR card in its current position.</summary>
+/// <summary>
+/// Закрепляет AR-карточку на месте и повторно разрешает её перемещение по нажатию.
+/// Компонент ставится на заранее созданную в префабе кнопку.
+/// </summary>
 public sealed class ARPanelLockButton : MonoBehaviour
 {
     private XRGrabInteractable grab;
@@ -20,6 +23,7 @@ public sealed class ARPanelLockButton : MonoBehaviour
 
     public void ToggleLock()
     {
+        // При закреплении отключаем захват карточки, но оставляем кнопку доступной.
         if (grab == null) grab = GetComponentInParent<XRGrabInteractable>();
         locked = !locked;
         if (grab != null) grab.enabled = !locked;

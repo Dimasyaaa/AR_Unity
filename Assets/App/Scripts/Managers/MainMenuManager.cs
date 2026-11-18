@@ -1,25 +1,19 @@
 using UnityEngine;
 using UnityEngine.SceneManagement;
-using UnityEngine.UI;
+using TMPro;
 using ArInventory.Local;
 
-// Управляет логикой главного меню, обработкой нажатий кнопок и переходом в AR-сцену
+/// <summary>Показывает данные вошедшего пользователя и обрабатывает кнопки главного меню.</summary>
 public class MainMenuManager : MonoBehaviour
 {
-    [Header("UI Elements")]
+    [Header("Элементы меню")]
     [SerializeField] private GameObject instructionsPanel;
+    [SerializeField] private TMP_Text userInfoText;
 
-    [Header("Buttons")]
-    [SerializeField] private Button scanButton;
-    [SerializeField] private Button instructionsButton;
-    [SerializeField] private Button exitButton;
-    [SerializeField] private Button closeButton;
-
-    [Header("User Info")]
-    [SerializeField] private TMPro.TMP_Text userInfoText;
-
-    void Start()
+    /// <summary>Обновляет подпись пользователя при открытии меню.</summary>
+    private void Start()
     {
+        // Гарантируем наличие локального клиента, если меню запустили отдельно в Editor.
         LocalClient.GetOrCreate();
 
         if (userInfoText != null)
@@ -28,62 +22,71 @@ public class MainMenuManager : MonoBehaviour
                 ? $"Пользователь: {SessionManager.FullName}"
                 : "Пользователь: не авторизован";
         }
+    }
 
-        // Привязываем методы к событиям нажатия кнопок
-        scanButton.onClick.AddListener(OnScanClicked);
-        instructionsButton.onClick.AddListener(OnInstructionsClicked);
-        exitButton.onClick.AddListener(OnExitClicked);
-        closeButton.onClick.AddListener(OnCloseClicked);
+    /// <summary>Снимает подписки на события сканера при выгрузке меню.</summary>
+    private void OnDestroy()
+    {
+        // Снимаем подписки, чтобы старый объект меню не реагировал на следующее сканирование.
+        StopListeningForQr();
+    }
 
-        // Скрываем панель инструкций при запуске
+    /// <summary>Подписывается на результат сканирования и запускает QR-сканер.</summary>
+    public void StartQrScan()
+    {
+        Debug.Log("[Menu] Starting QR scan...");
+
+        QRScanner scanner = QRScanner.Instance;
+        if (scanner == null)
+        {
+            Debug.LogWarning("[Menu] QR scanner is not available");
+            return;
+        }
+
+        // Сначала снимаем старую подписку: повторное нажатие не задвоит обработчик.
+        StopListeningForQr();
+        scanner.OnQRScanned += OnQRScanned;
+        scanner.OnScanCancelled += OnScanCancelled;
+        scanner.StartScanning();
+    }
+
+    /// <summary>Показывает панель инструкции.</summary>
+    public void ShowInstructions()
+    {
+        if (instructionsPanel != null)
+            instructionsPanel.SetActive(true);
+    }
+
+    /// <summary>Закрывает панель инструкции.</summary>
+    public void CloseInstructions()
+    {
         if (instructionsPanel != null)
             instructionsPanel.SetActive(false);
     }
 
-    private void OnDestroy()
+    /// <summary>Останавливает Play Mode в редакторе или закрывает приложение на устройстве.</summary>
+    public void ExitApplication()
     {
-        if (QRScanner.Instance != null)
-        {
-            QRScanner.Instance.OnQRScanned -= OnQRScanned;
-            QRScanner.Instance.OnScanCancelled -= OnScanCancelled;
-        }
+#if UNITY_EDITOR
+        UnityEditor.EditorApplication.isPlaying = false;
+#else
+        Application.Quit();
+#endif
     }
 
-    private void OnScanClicked()
-    {
-        Debug.Log("[Menu] Starting QR scan...");
-
-        if (QRScanner.Instance != null)
-        {
-            // Подписываемся на событие сканирования и запускаем процесс
-            QRScanner.Instance.OnQRScanned += OnQRScanned;
-            QRScanner.Instance.OnScanCancelled += OnScanCancelled;
-            QRScanner.Instance.StartScanning();
-        }
-    }
-
-    // Вызывается при успешном сканировании QR-кода
+    /// <summary>Сохраняет отсканированный QR, записывает событие и открывает AR-сцену.</summary>
     private void OnQRScanned(string qrData)
     {
         Debug.Log($"[Menu] QR scanned: {qrData}");
-
-        // Сохраняем данные для использования в следующей сцене
         GameDataManager.LastScannedQR = qrData;
+        StopListeningForQr();
 
-        // Отписываемся от события, чтобы избежать дублирования вызовов
-        if (QRScanner.Instance != null)
-        {
-            QRScanner.Instance.OnQRScanned -= OnQRScanned;
-            QRScanner.Instance.OnScanCancelled -= OnScanCancelled;
-        }
-
-        // Сохраняем событие сканирования в локальную базу.
         if (LocalClient.Instance != null && SessionManager.IsLoggedIn)
         {
             LocalClient.Instance.SendScan(
                 qrData,
                 onSuccess: response =>
-                    Debug.Log($"[Menu] Scan saved: {response.objectName} ({response.result})"),
+                    Debug.Log($"[Menu] QR сохранён в журнале: {response.objectName}; повторное сканирование: {response.wasRepeated}"),
                 onError: err =>
                     Debug.LogWarning($"[Menu] Scan not saved: {err}"));
         }
@@ -92,47 +95,25 @@ public class MainMenuManager : MonoBehaviour
             Debug.LogWarning("[Menu] Scan not saved: пользователь не вошел или LocalClient недоступен");
         }
 
-        // Загружаем основную AR-сцену
         SceneManager.LoadScene("SampleScene");
     }
 
+    /// <summary>Снимает ожидание результата, если пользователь закрыл сканер.</summary>
     private void OnScanCancelled()
     {
-        if (QRScanner.Instance != null)
-        {
-            QRScanner.Instance.OnQRScanned -= OnQRScanned;
-            QRScanner.Instance.OnScanCancelled -= OnScanCancelled;
-        }
+        // После отмены сканирования меню больше не ждёт результат.
+        StopListeningForQr();
     }
 
-    private void OnInstructionsClicked()
+    /// <summary>Удаляет обработчики с текущего QR-сканера, чтобы не накапливать подписки.</summary>
+    private void StopListeningForQr()
     {
-        Debug.Log("[Menu] Showing instructions");
-        if (instructionsPanel != null)
-            instructionsPanel.SetActive(true);
+        // Операция безопасна при повторном вызове: удалённую подписку снять можно ещё раз.
+        QRScanner scanner = QRScanner.Instance;
+        if (scanner == null)
+            return;
+
+        scanner.OnQRScanned -= OnQRScanned;
+        scanner.OnScanCancelled -= OnScanCancelled;
     }
-
-    private void OnCloseClicked()
-    {
-        Debug.Log("[Menu] Closing instructions");
-        if (instructionsPanel != null)
-            instructionsPanel.SetActive(false);
-    }
-
-    private void OnExitClicked()
-    {
-        Debug.Log("[Menu] Exiting application");
-
-#if UNITY_EDITOR
-        // Остановка режима Play в редакторе
-        UnityEditor.EditorApplication.isPlaying = false;
-#else
-        // Закрытие приложения на мобильном устройстве
-        Application.Quit();
-#endif
-    }
-
-    public void StartScan() => OnScanClicked();
-    public void ShowInstructions() => OnInstructionsClicked();
-    public void ExitApp() => OnExitClicked();
 }

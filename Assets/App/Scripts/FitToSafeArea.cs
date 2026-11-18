@@ -1,10 +1,14 @@
 using TMPro;
 using UnityEngine;
 
-/// <summary>Builds a responsive login layout inside the device safe area.</summary>
+/// <summary>
+/// Перестраивает форму входа при изменении размера экрана, safeArea или ориентации.
+/// Компонент находится на фоновой панели Canvas; поля формы ищутся по именам из LoginScene.
+/// </summary>
 [RequireComponent(typeof(RectTransform))]
 public class FitToSafeArea : MonoBehaviour
 {
+    // Ссылки и последние размеры нужны, чтобы не искать объекты заново каждый кадр.
     private RectTransform panel;
     private RectTransform canvas;
     private Vector2Int lastSize;
@@ -13,15 +17,18 @@ public class FitToSafeArea : MonoBehaviour
 
     private void Awake()
     {
+        // Панель является фоном формы, а её родитель — Canvas.
         panel = (RectTransform)transform;
         canvas = panel.parent as RectTransform;
         Apply();
     }
 
+    // Повторно применяем раскладку, если объект выключали и включали.
     private void OnEnable() => Apply();
 
     private void Update()
     {
+        // Пересчитываем положение элементов только при изменении экрана.
         if (lastSize.x != Screen.width || lastSize.y != Screen.height ||
             lastSafeArea != Screen.safeArea || lastPortrait != (Screen.height >= Screen.width))
             Apply();
@@ -29,12 +36,13 @@ public class FitToSafeArea : MonoBehaviour
 
     private void Apply()
     {
+        // Пока Canvas или экран имеют нулевой размер, якоря вычислить нельзя.
         if (panel == null || canvas == null || Screen.width <= 0 || Screen.height <= 0 ||
             canvas.rect.width <= 0 || canvas.rect.height <= 0)
             return;
 
         Rect safe = Screen.safeArea;
-        // The panel is the full-screen background. Safe margins are built into the child anchors.
+        // Фоновая панель занимает весь экран; форма внутри неё раскладывается относительными якорями.
         panel.anchorMin = Vector2.zero;
         panel.anchorMax = Vector2.one;
         panel.pivot = new Vector2(.5f, .5f);
@@ -45,7 +53,7 @@ public class FitToSafeArea : MonoBehaviour
 
         bool portrait = Screen.height >= Screen.width;
 
-        // Use normalized anchors so every control stays inside its panel at any aspect ratio.
+        // Поля формы имеют разные отступы в книжной и альбомной ориентациях.
         float fieldLeft = portrait ? .08f : .20f;
         float fieldRight = portrait ? .92f : .80f;
         Place("TitleText", portrait ? .08f : .20f, .87f, portrait ? .82f : .80f, .96f);
@@ -60,6 +68,8 @@ public class FitToSafeArea : MonoBehaviour
         if (help == null) help = canvas.Find("HelpButton");
         if (help is RectTransform helpRect)
         {
+            // Кнопка помощи может быть создана рядом с панелью, поэтому переносим её внутрь
+            // и располагаем в правом верхнем углу формы.
             helpRect.SetParent(panel, false);
             helpRect.anchorMin = portrait ? new Vector2(.82f, .86f) : new Vector2(.86f, .84f);
             helpRect.anchorMax = portrait ? new Vector2(.94f, .93f) : new Vector2(.93f, .96f);
@@ -76,6 +86,7 @@ public class FitToSafeArea : MonoBehaviour
 
     private void Place(string name, float left, float bottom, float right, float top)
     {
+        // Поиск по имени позволяет оставить все визуальные элементы в самой сцене.
         Transform child = panel.Find(name);
         if (!(child is RectTransform rect)) return;
         rect.anchorMin = new Vector2(left, bottom);
@@ -87,6 +98,7 @@ public class FitToSafeArea : MonoBehaviour
 
     private static void FitText(Transform root)
     {
+        // Ограничиваем размер текста и показываем многоточие вместо выхода за границы.
         foreach (TMP_Text text in root.GetComponentsInChildren<TMP_Text>(true))
         {
             text.enableAutoSizing = true;
@@ -99,6 +111,7 @@ public class FitToSafeArea : MonoBehaviour
         TMP_Dropdown dropdown = root.Find("DepartmentDropdown")?.GetComponent<TMP_Dropdown>();
         if (dropdown != null && dropdown.captionText != null)
         {
+            // В портретном режиме длинное название отдела можно переносить на следующую строку.
             dropdown.captionText.textWrappingMode = Screen.height >= Screen.width
                 ? TextWrappingModes.Normal
                 : TextWrappingModes.NoWrap;

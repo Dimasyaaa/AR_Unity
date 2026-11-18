@@ -2,12 +2,14 @@ using System;
 using System.IO;
 using UnityEngine;
 
+/// <summary>Снимает текущий кадр приложения и сохраняет фотографии отчёта.</summary>
 internal static class InventoryReportPhoto
 {
     private const int MaxEdge = 1920;
     private const int MaxBytes = 4 * 1024 * 1024;
     internal const string LegacyStoragePermission = "android.permission.WRITE_EXTERNAL_STORAGE";
 
+    /// <summary>Снимает кадр приложения, уменьшает его при необходимости и кодирует в JPEG.</summary>
     internal static Texture2D Capture(out byte[] jpeg)
     {
         var frame = ScreenCapture.CaptureScreenshotAsTexture();
@@ -38,6 +40,7 @@ internal static class InventoryReportPhoto
 
     private static Texture2D Resize(Texture2D source, int width, int height)
     {
+        // Временный RenderTexture уменьшает кадр, не создавая вторую полную копию.
         var previous = RenderTexture.active;
         var target = RenderTexture.GetTemporary(width, height, 0, RenderTextureFormat.ARGB32, RenderTextureReadWrite.sRGB);
         var resized = new Texture2D(width, height, TextureFormat.RGB24, false);
@@ -61,6 +64,7 @@ internal static class InventoryReportPhoto
         }
     }
 
+    /// <summary>Сохраняет JPEG в общую галерею Android или в папку приложения в редакторе.</summary>
     internal static string SaveToGallery(byte[] jpeg)
     {
         var name = $"AR-Inventory_{DateTime.Now:yyyyMMdd_HHmmss_fff}.jpg";

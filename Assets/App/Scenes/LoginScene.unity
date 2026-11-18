@@ -1268,7 +1268,19 @@ MonoBehaviour:
   m_TargetGraphic: {fileID: 374257474}
   m_OnClick:
     m_PersistentCalls:
-      m_Calls: []
+      m_Calls:
+      - m_Target: {fileID: 1350787421}
+        m_TargetAssemblyTypeName: LoginManager, Assembly-CSharp
+        m_MethodName: SignIn
+        m_Mode: 1
+        m_Arguments:
+          m_ObjectArgument: {fileID: 0}
+          m_ObjectArgumentAssemblyTypeName: UnityEngine.Object, UnityEngine
+          m_IntArgument: 0
+          m_FloatArgument: 0
+          m_StringArgument: 
+          m_BoolArgument: 0
+        m_CallState: 2
 --- !u!114 &374257474
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -3547,6 +3559,14 @@ PrefabInstance:
     - target: {fileID: 1969637032889055939, guid: 35a7c053ffeedf149a57bac138db3126, type: 3}
       propertyPath: m_SizeDelta.y
       value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 4788327440365681958, guid: 35a7c053ffeedf149a57bac138db3126, type: 3}
+      propertyPath: m_AnchoredPosition.x
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 4788327440365681958, guid: 35a7c053ffeedf149a57bac138db3126, type: 3}
+      propertyPath: m_AnchoredPosition.y
+      value: -50.218964
       objectReference: {fileID: 0}
     - target: {fileID: 5379344744311350993, guid: 35a7c053ffeedf149a57bac138db3126, type: 3}
       propertyPath: m_AnchorMax.y

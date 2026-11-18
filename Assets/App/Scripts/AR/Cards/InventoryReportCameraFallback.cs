@@ -4,7 +4,10 @@ using TMPro;
 using UnityEngine;
 using UnityEngine.XR.ARFoundation;
 
-/// <summary>Supplies a live background when Android cannot run the AR session.</summary>
+/// <summary>
+/// Показывает изображение камеры на Android, если устройство не может запустить AR-сессию.
+/// Сам экран отчёта не создаёт: получает готовое текстовое поле от контроллера отчёта.
+/// </summary>
 public sealed class InventoryReportCameraFallback : MonoBehaviour
 {
     public bool CanCapture { get; private set; }
@@ -23,6 +26,7 @@ public sealed class InventoryReportCameraFallback : MonoBehaviour
 
     public void Show(TextMeshProUGUI message)
     {
+        // Разрешаем съёмку и при необходимости запускаем камеру вместо AR-сессии.
         CanCapture = true;
 #if UNITY_ANDROID && !UNITY_EDITOR
         status = message;
@@ -33,6 +37,7 @@ public sealed class InventoryReportCameraFallback : MonoBehaviour
 
     public void Hide()
     {
+        // При закрытии экрана съёмки останавливаем камеру и освобождаем ресурсы.
         CanCapture = false;
 #if UNITY_ANDROID && !UNITY_EDITOR
         shown = false;
@@ -71,6 +76,7 @@ public sealed class InventoryReportCameraFallback : MonoBehaviour
 #if UNITY_ANDROID && !UNITY_EDITOR
     private void StartFallback()
     {
+        // Запасной режим используется на Android после запроса разрешения на камеру.
         fallbackStarted = true;
         CanCapture = false;
         status.text = "Подключаем камеру…";
@@ -117,6 +123,7 @@ public sealed class InventoryReportCameraFallback : MonoBehaviour
 
     private void FitCameraFeed()
     {
+        // Учитываем поворот кадра и подгоняем видеопоток под поле зрения камеры.
         int rotation = feed.videoRotationAngle;
         float cameraWidth = feed.width;
         float cameraHeight = feed.height;
@@ -138,6 +145,7 @@ public sealed class InventoryReportCameraFallback : MonoBehaviour
 
     private void ReleaseCamera()
     {
+        // Останавливаем поток и удаляем созданные для него Unity-ресурсы.
         if (feed != null) { feed.Stop(); Destroy(feed); feed = null; }
         if (background != null) { background.SetActive(false); Destroy(background); background = null; }
         if (material != null) { Destroy(material); material = null; }

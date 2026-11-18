@@ -8,22 +8,39 @@ using SQLite;
 
 namespace ArInventory.Local
 {
+    /// <summary>Открывает локальную SQLite-базу и предоставляет офлайн-данные приложения.</summary>
     public class LocalDatabase : MonoBehaviour
     {
+        /// <summary>Единственный активный экземпляр локальной базы данных.</summary>
         public static LocalDatabase Instance { get; private set; }
+
+        /// <summary>Событие вызывается после создания таблиц и подготовки базы к запросам.</summary>
         public static event System.Action OnDatabaseReady;
 
-        private SQLiteConnection db;
-        public bool IsReady { get; private set; }
-        public string DatabasePath { get; private set; }
+        /// <summary>Возвращает текущую базу или создаёт её, если её ещё нет в сцене.</summary>
+        public static LocalDatabase GetOrCreate()
+        {
+            if (Instance != null)
+                return Instance;
 
+            var databaseObject = new GameObject("LocalDatabase");
+            return databaseObject.AddComponent<LocalDatabase>();
+        }
+
+        private SQLiteConnection db;
+        private string databasePath;
+
+        /// <summary>Показывает, завершена ли подготовка локальной базы.</summary>
+        public bool IsReady { get; private set; }
+
+        /// <summary>Открывает базу в постоянном хранилище приложения.</summary>
         private void Awake()
         {
             if (Instance != null && Instance != this) { Destroy(gameObject); return; }
             Instance = this;
             DontDestroyOnLoad(gameObject);
 
-            DatabasePath = Path.Combine(Application.persistentDataPath, "inventory.db");
+            databasePath = Path.Combine(Application.persistentDataPath, "inventory.db");
 
 #if UNITY_ANDROID && !UNITY_EDITOR
             StartCoroutine(InitAndroid());
@@ -32,6 +49,7 @@ namespace ArInventory.Local
 #endif
         }
 
+        /// <summary>Подготавливает базу из StreamingAssets в редакторе и на компьютере.</summary>
         private void InitDesktop()
         {
             string source = Path.Combine(
@@ -42,6 +60,7 @@ namespace ArInventory.Local
             OpenDatabase();
         }
 
+        /// <summary>Копирует базу из Android APK во внутреннее хранилище приложения.</summary>
         private System.Collections.IEnumerator InitAndroid()
         {
             string url = "jar:file://" + Application.dataPath +
@@ -58,13 +77,13 @@ namespace ArInventory.Local
                 }
                 else
                 {
-                    Debug.LogError("[DB] Failed to copy database: " + www.error);
+                    Debug.LogError("[БД] Не удалось скопировать базу данных: " + www.error);
                 }
             }
             OpenDatabase();
         }
 
-        // Копирует или обновляет локальную БД, сохраняя локальные сессии
+        /// <summary>Копирует новую базу или обновляет справочники, сохраняя локальную историю.</summary>
         private void PrepareDatabase(string sourcePath)
         {
             if (!File.Exists(sourcePath))
@@ -73,13 +92,13 @@ namespace ArInventory.Local
                 return;
             }
 
-            string markerPath = DatabasePath + ".marker";
+            string markerPath = databasePath + ".marker";
             string newHash = ComputeHash(sourcePath);
 
             // Первый запуск — просто копируем
-            if (!File.Exists(DatabasePath))
+            if (!File.Exists(databasePath))
             {
-                File.Copy(sourcePath, DatabasePath, overwrite: true);
+                File.Copy(sourcePath, databasePath, overwrite: true);
                 File.WriteAllText(markerPath, newHash);
                 Debug.Log("[DB] Copied fresh database");
                 return;
@@ -107,7 +126,7 @@ namespace ArInventory.Local
             Debug.Log("[DB] Reference data refreshed from new export");
         }
 
-        // Обновляет справочники из экспорта, не затрагивая локальные сессии и проверки.
+        /// <summary>Заменяет данные справочников, не удаляя сохранённые пользователем события и отчёты.</summary>
         private void RefreshReferenceData(string sourcePath)
         {
             bool hasCabinetTables;
@@ -119,7 +138,7 @@ namespace ArInventory.Local
                 hasCabinetPhotoTable = source.GetTableInfo("cabinet_photos").Count > 0;
             }
 
-            using (var conn = new SQLiteConnection(DatabasePath))
+            using (var conn = new SQLiteConnection(databasePath))
             {
                 conn.CreateTable<LocalCabinetPhoto>();
                 conn.Execute("ATTACH DATABASE ? AS newdb", sourcePath);
@@ -144,6 +163,7 @@ namespace ArInventory.Local
             }
         }
 
+        /// <summary>Считает отпечаток экспортированной базы, чтобы не обновлять её без изменений.</summary>
         private string ComputeHash(string path)
         {
             using (var md5 = MD5.Create())
@@ -154,17 +174,18 @@ namespace ArInventory.Local
             }
         }
 
+        /// <summary>Создаёт локальные таблицы, применяет обновления схемы и сообщает о готовности базы.</summary>
         private void OpenDatabase()
         {
             SQLitePCL.Batteries_V2.Init();
 
-            if (!File.Exists(DatabasePath))
+            if (!File.Exists(databasePath))
             {
-                Debug.LogError("[DB] inventory.db still missing at " + DatabasePath);
+                Debug.LogError("[DB] inventory.db still missing at " + databasePath);
                 return;
             }
 
-            db = new SQLiteConnection(DatabasePath);
+            db = new SQLiteConnection(databasePath);
             IsReady = true;
 
             db.CreateTable<LocalInventorySession>();
@@ -189,6 +210,7 @@ namespace ArInventory.Local
             OnDatabaseReady?.Invoke();
         }
 
+        /// <summary>Ищет активный шкаф по QR-коду или последнему сегменту QR-ссылки.</summary>
         public LocalCabinetProfile FindCabinetByQr(string qrValue)
         {
             if (!IsReady || string.IsNullOrWhiteSpace(qrValue)) return null;
@@ -204,6 +226,7 @@ namespace ArInventory.Local
                 .FirstOrDefault(cabinet => cabinet.is_active && cabinet.qr_code_id == qr.id);
         }
 
+        /// <summary>Возвращает активные пункты чек-листа в заданном порядке.</summary>
         public List<LocalCabinetChecklistItem> GetCabinetChecklist(long cabinetId)
         {
             if (!IsReady) return new List<LocalCabinetChecklistItem>();
@@ -215,6 +238,7 @@ namespace ArInventory.Local
                 .ToList();
         }
 
+        /// <summary>Возвращает фотографии листов шкафа в порядке их отображения.</summary>
         public List<LocalCabinetPhoto> GetCabinetPhotos(long cabinetId)
         {
             if (!IsReady) return new List<LocalCabinetPhoto>();
@@ -225,6 +249,7 @@ namespace ArInventory.Local
                 .ToList();
         }
 
+        /// <summary>Сохраняет отчёт и отметки пунктов одной транзакцией, чтобы не оставить половину записи.</summary>
         public void SaveInventoryRun(InventoryRunSyncDto report, long cabinetId, long qrCodeId,
             string cabinetTitle, IReadOnlyDictionary<long, string> itemNames)
         {
@@ -270,12 +295,14 @@ namespace ArInventory.Local
 
         }
 
+        /// <summary>Помечает отчёт синхронизированным и очищает локальную копию медиа-пакета.</summary>
         public void MarkInventoryRunSynced(string clientRunId)
         {
             if (!IsReady || string.IsNullOrWhiteSpace(clientRunId)) return;
             db.Execute("UPDATE local_inventory_runs SET synced = 1, report_payload = NULL WHERE client_run_id = ?", clientRunId);
         }
 
+        /// <summary>Для QR-ссылки возвращает саму ссылку и её последний сегмент.</summary>
         public static List<string> ExpandQr(string value)
         {
             var result = new List<string>();
@@ -293,6 +320,7 @@ namespace ArInventory.Local
         }
 
 #if UNITY_EDITOR
+        /// <summary>Добавляет тестовый шкаф и пункты чек-листа только в Unity Editor.</summary>
         private void EnsureEditorDemoCabinet()
         {
             const string demoCode = "DEMO-CABINET-001";
@@ -345,6 +373,7 @@ namespace ArInventory.Local
         }
 #endif
 
+        /// <summary>Возвращает подключение SQLite после подготовки базы.</summary>
         public SQLiteConnection Connection
         {
             get
@@ -354,6 +383,7 @@ namespace ArInventory.Local
             }
         }
 
+        /// <summary>Закрывает SQLite-подключение при завершении приложения.</summary>
         private void OnDestroy()
         {
             if (db != null) { db.Dispose(); db = null; }

@@ -4,7 +4,7 @@ using UnityEngine.XR.Templates.AR;
 using UnityEngine.XR.Interaction.Toolkit.Samples.StarterAssets;
 using UnityEngine.UI;
 
-/// <summary>Selects one of the card prefabs explicitly listed on the scene's ObjectSpawner.</summary>
+/// <summary>Выбирает карточку для размещения и управляет режимом штатного AR-спавнера.</summary>
 public static class ARCardSpawnUtility
 {
     private static ObjectSpawner activeSpawner;
@@ -16,6 +16,7 @@ public static class ARCardSpawnUtility
         DisablePlacement();
     }
 
+    /// <summary>Добавляет панели мягкую тень, сохраняя её объём в самом префабе.</summary>
     public static void AddPanelDepth(Image panelImage)
     {
         if (panelImage == null)
@@ -27,10 +28,11 @@ public static class ARCardSpawnUtility
         shadow.effectDistance = new Vector2(16f, -16f);
         shadow.useGraphicAlpha = true;
 
-        // Keep card depth in prefab geometry. A runtime cube can end up in
-        // front of the World Space Canvas when its facing direction changes.
+        // Объём панели задаётся геометрией префаба: созданный здесь куб может
+        // оказаться перед Canvas при изменении направления карточки.
     }
 
+    /// <summary>Выбирает префаб и включает ожидание касания поверхности для размещения.</summary>
     public static bool SelectForPlacement(GameObject cardPrefab)
     {
         if (cardPrefab == null)
@@ -79,6 +81,7 @@ public static class ARCardSpawnUtility
         return true;
     }
 
+    /// <summary>Останавливает режим размещения и скрывает меню карточек.</summary>
     public static void DisablePlacement()
     {
         if (activeSpawner != null) activeSpawner.objectSpawned -= OnObjectSpawned;
@@ -122,16 +125,13 @@ public static class ARCardSpawnUtility
             return Object.FindAnyObjectByType<CalculatorController>(FindObjectsInactive.Include);
         var imageCard = prefab.GetComponentInChildren<ImageCardController>(true);
         if (imageCard != null)
-            return Object.FindObjectsByType<ImageCardController>(FindObjectsInactive.Include)
-                .FirstOrDefault(card => card.CabinetViewOnly == imageCard.CabinetViewOnly);
+            return Object.FindAnyObjectByType<ImageCardController>(FindObjectsInactive.Include);
         if (prefab.GetComponentInChildren<InventoryChecklistController>(true) != null)
             return Object.FindAnyObjectByType<InventoryChecklistController>(FindObjectsInactive.Include);
-        if (prefab.GetComponentInChildren<WebCardController>(true) != null)
-            return Object.FindAnyObjectByType<WebCardController>(FindObjectsInactive.Include);
-
         return null;
     }
 
+    /// <summary>Проверяет, размещена ли карточка или уже открыта в режиме оверлея.</summary>
     public static bool IsCardAlreadyPresent(GameObject prefab) =>
         prefab != null && (FindExistingCard(prefab) != null || ARCardModeSelector.HasOverlay(prefab));
 

@@ -3,11 +3,14 @@ using System.IO;
 using System.Text;
 using UnityEngine;
 
+/// <summary>Подготавливает голосовой комментарий для отправки и прослушивания.</summary>
 internal static class InventoryReportVoice
 {
     internal const int Rate = 16000;
     internal const int MaxSeconds = 60;
 
+    /// <summary>Преобразует запись микрофона в одноканальный WAV для отправки на сервер.</summary>
+    /// <remarks>Копия в формате AudioClip возвращается отдельно для прослушивания в отчёте.</remarks>
     internal static byte[] Encode(AudioClip recording, int frames, out AudioClip preview)
     {
         preview = null;

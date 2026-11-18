@@ -4,18 +4,15 @@ using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
 
-/// <summary>Third AR card: product sheets for regular QR codes and cabinet photo pages for inventory.</summary>
+/// <summary>
+/// Загружает и показывает фотографии шкафа в заранее собранной карточке.
+/// Данные берутся из API или локальной базы, а кнопки листов переключают изображения.
+/// </summary>
 public class ImageCardController : MonoBehaviour
 {
-    [Header("Режим карточки")]
-    [SerializeField] private bool cabinetViewOnly;
-    public bool CabinetViewOnly => cabinetViewOnly;
     [Header("Область изображения")]
     [SerializeField] private float maxImageWidth = 500f;
     [SerializeField] private float maxImageHeight = 640f;
-    [Header("Листы информации о продукции")]
-    [SerializeField] private Texture2D sheet1;
-    [SerializeField] private Texture2D sheet2;
 
     private readonly Texture2D[] cabinetPhotos = new Texture2D[2];
     private readonly bool[] availablePages = new bool[2];
@@ -25,15 +22,14 @@ public class ImageCardController : MonoBehaviour
     private Button pageOneButton;
     private Button pageTwoButton;
     private Button closeButton;
-    private Texture2D[] sheets;
     private LocalCabinetProfile localCabinet;
     private string qrCode;
     private string cabinetTitle;
     private int selectedPage;
-    private bool cabinetMode;
 
     private void Start()
     {
+        // Находим элементы, которые уже собраны в префабе, и связываем их с данными.
         var canvas = GetComponentInChildren<Canvas>();
         if (canvas == null) { Debug.LogError("[ImageCard] Canvas не найден."); return; }
         var panel = canvas.transform.Find("Panel");
@@ -41,38 +37,24 @@ public class ImageCardController : MonoBehaviour
         BindUI(panel);
 
         qrCode = GameDataManager.LastScannedQR;
-        if (cabinetViewOnly)
+        localCabinet = LocalDatabase.Instance != null
+            ? LocalDatabase.Instance.FindCabinetByQr(qrCode)
+            : null;
+        if (localCabinet != null)
         {
-            localCabinet = LocalDatabase.Instance != null
-                ? LocalDatabase.Instance.FindCabinetByQr(qrCode)
-                : null;
-            if (localCabinet != null)
-            {
-                cabinetMode = true;
-                cabinetTitle = localCabinet.title;
-                AddLocalFallbackPhoto(1, localCabinet.reference_photo);
-                foreach (var photo in LocalDatabase.Instance.GetCabinetPhotos(localCabinet.id))
-                    AddLocalFallbackPhoto(photo.page_number, photo.image_data);
-                ShowCabinetPage(0);
-            }
-            else
-            {
-                cabinetMode = true;
-                cabinetTitle = "Шкаф";
-                if (titleText != null) titleText.text = "Загружаем данные шкафа…";
-            }
+            cabinetTitle = localCabinet.title;
+            AddLocalFallbackPhoto(1, localCabinet.reference_photo);
+            foreach (var photo in LocalDatabase.Instance.GetCabinetPhotos(localCabinet.id))
+                AddLocalFallbackPhoto(photo.page_number, photo.image_data);
+            ShowCabinetPage(0);
         }
         else
         {
-            sheets = new[]
-            {
-                sheet1 != null ? sheet1 : Resources.Load<Texture2D>("Images/product_sheet_1"),
-                sheet2 != null ? sheet2 : Resources.Load<Texture2D>("Images/product_sheet_2")
-            };
-            ShowSheet(0);
+            cabinetTitle = "Шкаф";
+            if (titleText != null) titleText.text = "Загружаем данные шкафа…";
         }
 
-        if (cabinetViewOnly && !string.IsNullOrWhiteSpace(qrCode))
+        if (!string.IsNullOrWhiteSpace(qrCode))
             InventoryApiClient.GetCabinet(this, qrCode, OnCabinetReceived, error =>
             {
                 if (localCabinet == null) Debug.Log("[ImageCard] QR не относится к шкафу или API недоступен: " + error);
@@ -81,6 +63,7 @@ public class ImageCardController : MonoBehaviour
 
     private void BindUI(Transform panel)
     {
+        // Имена дочерних объектов являются частью структуры префаба.
         ARCardSpawnUtility.AddPanelDepth(panel.GetComponent<Image>());
         var sheet = panel.Find("Sheet");
         rawImage = sheet != null ? sheet.GetComponent<RawImage>() : null;
@@ -97,7 +80,7 @@ public class ImageCardController : MonoBehaviour
 
     private void OnCabinetReceived(InventoryCabinetResponse response)
     {
-        cabinetMode = true;
+        // Сначала отмечаем страницы доступными, затем загружаем их изображения по API.
         cabinetTitle = response.title;
         if (titleText != null) titleText.text = "Шкаф: " + cabinetTitle;
 
@@ -130,6 +113,7 @@ public class ImageCardController : MonoBehaviour
 
     private void AddLocalFallbackPhoto(int pageNumber, byte[] bytes)
     {
+        // Локальная копия нужна, если телефон временно не может достучаться до API.
         int pageIndex = pageNumber - 1;
         if (pageIndex < 0 || pageIndex >= cabinetPhotos.Length || bytes == null || bytes.Length == 0) return;
         var texture = new Texture2D(2, 2, TextureFormat.RGBA32, false);
@@ -142,24 +126,22 @@ public class ImageCardController : MonoBehaviour
 
     private void SelectPage(int index)
     {
-        if (cabinetMode) ShowCabinetPage(index);
-        else ShowSheet(index);
+        // Кнопки переключают только те фотографии шкафа, которые удалось загрузить.
+        ShowCabinetPage(index);
     }
 
     public bool SelectPageFromVoice(int index)
     {
         int page = Mathf.Clamp(index, 0, 1);
-        bool available = cabinetMode
-            ? availablePages[page]
-            : sheets != null && page < sheets.Length && sheets[page] != null;
-        if (!available) return false;
+        if (!availablePages[page]) return false;
         SelectPage(page);
         return true;
     }
 
     private void ShowCabinetPage(int index)
     {
-        if (!cabinetMode || rawImage == null || imageRect == null) return;
+        // Показываем загруженный лист и обновляем подпись с номером страницы.
+        if (rawImage == null || imageRect == null) return;
         index = Mathf.Clamp(index, 0, 1);
         if (!availablePages[index]) return;
         selectedPage = index;
@@ -174,28 +156,15 @@ public class ImageCardController : MonoBehaviour
                 : $"{cabinetTitle}\nЗагружаем лист {index + 1}…";
     }
 
-    private void ShowSheet(int index)
-    {
-        if (cabinetMode || sheets == null || rawImage == null || imageRect == null) return;
-        int selected = Mathf.Clamp(index, 0, sheets.Length - 1);
-        var texture = sheets[selected];
-        if (texture == null) { Debug.LogWarning("[ImageCard] Лист продукции не найден: " + selected); return; }
-        selectedPage = selected;
-        rawImage.color = Color.white;
-        rawImage.texture = texture;
-        if (titleText != null) titleText.text = $"Информация о продукции · Лист {selected + 1}";
-        FitImage(texture);
-        UpdatePageButtons();
-    }
-
     private void UpdatePageButtons()
     {
-        if (pageOneButton != null) pageOneButton.gameObject.SetActive(cabinetMode ? availablePages[0] : sheets != null && sheets.Length > 0 && sheets[0] != null);
-        if (pageTwoButton != null) pageTwoButton.gameObject.SetActive(cabinetMode ? availablePages[1] : sheets != null && sheets.Length > 1 && sheets[1] != null);
+        if (pageOneButton != null) pageOneButton.gameObject.SetActive(availablePages[0]);
+        if (pageTwoButton != null) pageTwoButton.gameObject.SetActive(availablePages[1]);
     }
 
     private void FitImage(Texture texture)
     {
+        // Сохраняем пропорции и вписываем изображение в заданные размеры карточки.
         float aspect = (float)texture.width / texture.height;
         float width = maxImageWidth;
         float height = width / aspect;
@@ -205,6 +174,7 @@ public class ImageCardController : MonoBehaviour
 
     private void OnDestroy()
     {
+        // Загруженные во время работы текстуры освобождаются вместе с карточкой.
         for (int i = 0; i < cabinetPhotos.Length; i++)
             if (cabinetPhotos[i] != null) Destroy(cabinetPhotos[i]);
     }

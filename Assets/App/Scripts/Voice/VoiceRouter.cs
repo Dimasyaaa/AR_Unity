@@ -8,9 +8,13 @@ using UnityEngine.EventSystems;
 using UnityEngine.SceneManagement;
 using UnityEngine.UI;
 
-/// <summary>Routes recognized Russian speech to the controls currently available in the app.</summary>
+/// <summary>
+/// Получает распознанные фразы и вызывает соответствующие действия активной сцены:
+/// поля, списки, кнопки меню, AR-карточки и элементы отчёта.
+/// </summary>
 public sealed class VoiceRouter : MonoBehaviour
 {
+    // Слова-числа нужны для калькулятора и для продиктованных выражений.
     private static readonly Dictionary<string, string> DigitWords = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
     {
         ["ноль"] = "0", ["нуль"] = "0", ["один"] = "1", ["одна"] = "1", ["одно"] = "1",
@@ -20,12 +24,16 @@ public sealed class VoiceRouter : MonoBehaviour
 
     public static VoiceRouter Instance { get; private set; }
 
+    // Последние выбранные элементы позволяют продолжать ввод и навигацию короткими командами.
     private TMP_Dropdown lastDropdown;
     private TMP_InputField lastInput;
+    // Запоминаем исходный размер карточки, чтобы команда сброса возвращала её к нему.
     private readonly Dictionary<Transform, Vector3> originalCardScales = new Dictionary<Transform, Vector3>();
 
+    /// <summary>Оставляет один маршрутизатор и создаёт компонент распознавания, если его ещё нет.</summary>
     private void Awake()
     {
+        // На переходах между сценами сохраняется один маршрутизатор команд.
         if (Instance != null && Instance != this)
         {
             Destroy(gameObject);
@@ -38,6 +46,7 @@ public sealed class VoiceRouter : MonoBehaviour
             gameObject.AddComponent<VoiceController>();
     }
 
+    /// <summary>Подписывается на распознанные фразы и события загрузки сцен.</summary>
     private void OnEnable()
     {
         if (VoiceController.Instance != null)
@@ -45,6 +54,7 @@ public sealed class VoiceRouter : MonoBehaviour
         SceneManager.sceneLoaded += OnSceneLoaded;
     }
 
+    /// <summary>Снимает подписки, чтобы не обрабатывать одну фразу несколько раз.</summary>
     private void OnDisable()
     {
         if (VoiceController.Instance != null)
@@ -52,12 +62,14 @@ public sealed class VoiceRouter : MonoBehaviour
         SceneManager.sceneLoaded -= OnSceneLoaded;
     }
 
+    /// <summary>Очищает ссылку на экземпляр перед уничтожением объекта.</summary>
     private void OnDestroy()
     {
         if (Instance == this)
             Instance = null;
     }
 
+    /// <summary>Сбрасывает ссылки на элементы старой сцены после перехода.</summary>
     private void OnSceneLoaded(Scene scene, LoadSceneMode mode)
     {
         lastDropdown = null;
@@ -65,11 +77,14 @@ public sealed class VoiceRouter : MonoBehaviour
         originalCardScales.Clear();
     }
 
+    /// <summary>Разбирает фразу и передаёт её подходящему экрану или компоненту.</summary>
     private void Handle(string raw)
     {
         if (string.IsNullOrWhiteSpace(raw))
             return;
 
+        // Сначала обрабатываем открытый отчёт и помощь, затем поля и списки,
+        // после этого — действия AR-карточек.
         string phrase = raw.Trim();
         string normalized = Normalize(phrase);
         string scene = SceneManager.GetActiveScene().name;
@@ -123,12 +138,6 @@ public sealed class VoiceRouter : MonoBehaviour
         }
 
         if (TryHandleImagePage(normalized, out action))
-        {
-            Report(action);
-            return;
-        }
-
-        if (TryHandleWebMovement(normalized, out action))
         {
             Report(action);
             return;
@@ -203,7 +212,7 @@ public sealed class VoiceRouter : MonoBehaviour
             return;
         }
 
-        if (TryPressSpokenButton(phrase, normalized, out action))
+        if (TryPressSpokenButton(normalized, out action))
         {
             Report(action);
             return;
@@ -214,6 +223,7 @@ public sealed class VoiceRouter : MonoBehaviour
             : "Команда не распознана. Скажите «помощь», чтобы увидеть доступные команды.");
     }
 
+    // Команды главного меню.
     private static bool HandleStart(string phrase, out string action)
     {
         if (Has(phrase, "сканировать", "скан", "qr", "scan"))
@@ -232,6 +242,7 @@ public sealed class VoiceRouter : MonoBehaviour
         return false;
     }
 
+    // Команды авторизации и выбора отдела.
     private bool HandleLogin(string phrase, out string action)
     {
         if (Has(phrase, "отдел", "подразделение", "department"))
@@ -254,16 +265,13 @@ public sealed class VoiceRouter : MonoBehaviour
         return false;
     }
 
+    // Команды сцены дополненной реальности и выбора карточек из меню.
     private bool HandleARScene(string phrase, out string action)
     {
         if (Has(phrase, "сканировать", "скан", "qr", "scan"))
             return PressAny(new[] { "Rescan QR Button", "Сканировать QR" }, out action);
         if (Has(phrase, "главное меню", "вернуться в меню", "назад", "back"))
-        {
-            SceneManager.LoadScene("StartScene");
-            action = "Возврат в главное меню";
-            return true;
-        }
+            return PressAny(new[] { "Main Menu Button", "Главное меню" }, out action);
         if (Has(phrase, "далее", "продолжить", "начать", "continue", "start"))
             return PressAny(new[] { "Continue Button", "Начать" }, out action);
         if (Has(phrase, "меню объектов", "открыть меню", "создать", "menu"))
@@ -285,44 +293,20 @@ public sealed class VoiceRouter : MonoBehaviour
             return PressAny(new[] { "Debug Menu Toggle" }, out action);
 
         if (Has(phrase, "калькулятор", "calculator", "посчитать", "calc"))
-            return SpawnImageCard("Button (Calculator)", out action);
+            return SelectCardButton("Button (Calculator)", out action);
         if (Has(phrase, "инвентаризация", "чек лист", "чеклист", "проверка шкафа"))
-            return SpawnImageCard("Button (Inventory)", out action);
+            return SelectCardButton("Button (Inventory)", out action);
         if (Has(phrase, "вид шкафа", "фото шкафа", "лист шкафа", "шкаф"))
-            return SpawnImageCard("Button (Cabinet)", out action);
+            return SelectCardButton("Button (Cabinet)", out action);
 
         if (Has(phrase, "оверлей", "режим экрана", "overlay"))
             return PressAny(new[] { "оверлей", "Overlay" }, out action);
         if (Has(phrase, "режим объекта", "как объект", "object mode"))
             return PressAny(new[] { "объект", "Object" }, out action);
-        if (Has(phrase, "закрыть веб", "закрой веб", "закрой сайт", "close web") && WebOverlayController.Instance != null)
+        if (Has(phrase, "карточка", "изображение"))
         {
-            WebOverlayController.Instance.Close();
-            action = "Веб-окно закрыто";
+            action = "Назовите карточку: «калькулятор», «вид шкафа» или «инвентаризация».";
             return true;
-        }
-        if (Has(phrase, "веб", "сайт", "web"))
-        {
-            WebButtonHook web = FindObjectsByType<WebButtonHook>(FindObjectsInactive.Include).FirstOrDefault(hook => hook != null);
-            if (web != null)
-            {
-                web.OpenWeb();
-                action = "Веб-окно открыто";
-                return true;
-            }
-            return PressAny(new[] { "Button (Web)", "Веб" }, out action);
-        }
-        if (Has(phrase, "карточка", "изображение", "фото продукции", "image card"))
-        {
-            ImageButtonHook image = FindObjectsByType<ImageButtonHook>(FindObjectsInactive.Include)
-                .FirstOrDefault(hook => hook != null && hook.gameObject.name != "Button (Cabinet)" && hook.gameObject.name != "Button (Inventory)");
-            if (image != null)
-            {
-                image.SpawnCard();
-                action = "Выбрана карточка изображения";
-                return true;
-            }
-            return PressAny(new[] { "Button (WebImg)", "Карточка" }, out action);
         }
 
         if (Has(phrase, "закрыть все", "закрой все", "убрать все карточки"))
@@ -335,6 +319,7 @@ public sealed class VoiceRouter : MonoBehaviour
         return false;
     }
 
+    // Выбирает поле ввода и подставляет в него продиктованный текст.
     private bool TryHandleInput(string raw, string phrase, out string action)
     {
         action = null;
@@ -440,6 +425,7 @@ public sealed class VoiceRouter : MonoBehaviour
         return false;
     }
 
+    // Управляет открытым списком отделов или другим TMP_Dropdown на экране.
     private bool TryHandleDropdown(string phrase, out string action)
     {
         action = null;
@@ -504,6 +490,7 @@ public sealed class VoiceRouter : MonoBehaviour
         return false;
     }
 
+    // Меняет размер открытой карточки и при необходимости возвращает исходный масштаб.
     private bool TryHandleScale(string phrase, out string action)
     {
         action = null;
@@ -513,18 +500,7 @@ public sealed class VoiceRouter : MonoBehaviour
         if (!reset && !enlarge && !reduce)
             return false;
 
-        WebOverlayController web = WebOverlayController.Instance;
         List<Transform> cards = GetOpenCardTransforms(phrase);
-        bool explicitlyTargetsWeb = Has(phrase, "страниц", "веб", "сайт", "web", "page");
-        if (web != null && web.IsOpen && (explicitlyTargetsWeb || cards.Count == 0))
-        {
-            if (reset) web.ResetZoom();
-            else if (enlarge) web.ZoomIn();
-            else web.ZoomOut();
-            action = reset ? "Масштаб страницы сброшен" : enlarge ? "Страница увеличена" : "Страница уменьшена";
-            return true;
-        }
-
         if (cards.Count == 0)
         {
             action = "Сначала разместите AR-карточку";
@@ -557,6 +533,7 @@ public sealed class VoiceRouter : MonoBehaviour
         return true;
     }
 
+    // Переключает листы карточки шкафа или изображения.
     private bool TryHandleImagePage(string phrase, out string action)
     {
         action = null;
@@ -581,38 +558,13 @@ public sealed class VoiceRouter : MonoBehaviour
         return true;
     }
 
-    private bool TryHandleWebMovement(string phrase, out string action)
-    {
-        action = null;
-        WebOverlayController web = WebOverlayController.Instance;
-        if (web == null || !web.IsOpen)
-            return false;
-
-        bool webContext = Has(phrase, "веб", "страниц", "сайт", "окно", "web", "page");
-        if (!webContext)
-            return false;
-
-        if (Has(phrase, "налево", "влево", "сдвинь влево", "move left"))
-            web.MoveLeft();
-        else if (Has(phrase, "направо", "вправо", "сдвинь вправо", "move right"))
-            web.MoveRight();
-        else if (Has(phrase, "вверх", "подними", "move up"))
-            web.MoveUp();
-        else if (Has(phrase, "вниз", "опусти", "move down"))
-            web.MoveDown();
-        else
-            return false;
-
-        action = "Положение веб-окна изменено";
-        return true;
-    }
-
+    // Закрывает названную карточку либо последнюю открытую карточку.
     private static bool TryHandleCardClose(string phrase, out string action)
     {
         action = null;
         bool isCloseCommand = Has(phrase, "закрыть карточку", "закрой карточку", "закрыть панель", "закрой панель",
             "закрой калькулятор", "закрыть калькулятор", "закрой инвентаризацию", "закрыть инвентаризацию",
-            "закрой шкаф", "закрыть шкаф", "закрой фото", "закрыть фото", "закрой веб карточку", "закрыть веб карточку",
+            "закрой шкаф", "закрыть шкаф", "закрой фото", "закрыть фото",
             "close card", "close panel");
         if (!isCloseCommand)
             return false;
@@ -620,9 +572,7 @@ public sealed class VoiceRouter : MonoBehaviour
         bool targetCalculator = Has(phrase, "калькулятор", "calc");
         bool targetInventory = Has(phrase, "инвентаризац", "чек лист", "чеклист");
         bool targetCabinet = Has(phrase, "шкаф", "фото");
-        bool targetProduct = Has(phrase, "продукц", "информац");
-        bool targetWeb = Has(phrase, "веб", "сайт", "web");
-        bool hasTarget = targetCalculator || targetInventory || targetCabinet || targetProduct || targetWeb;
+        bool hasTarget = targetCalculator || targetInventory || targetCabinet;
 
         var candidates = new List<GameObject>();
         foreach (CalculatorController card in FindObjectsByType<CalculatorController>(FindObjectsInactive.Include))
@@ -630,10 +580,7 @@ public sealed class VoiceRouter : MonoBehaviour
         foreach (InventoryChecklistController card in FindObjectsByType<InventoryChecklistController>(FindObjectsInactive.Include))
             if (card != null && card.gameObject.activeInHierarchy && (!hasTarget || targetInventory)) candidates.Add(card.gameObject);
         foreach (ImageCardController card in FindObjectsByType<ImageCardController>(FindObjectsInactive.Include))
-            if (card != null && card.gameObject.activeInHierarchy && (!hasTarget || (card.CabinetViewOnly ? targetCabinet : targetProduct))) candidates.Add(card.gameObject);
-        foreach (WebCardController card in FindObjectsByType<WebCardController>(FindObjectsInactive.Include))
-            if (card != null && card.gameObject.activeInHierarchy && (!hasTarget || targetWeb)) candidates.Add(card.gameObject);
-
+            if (card != null && card.gameObject.activeInHierarchy && (!hasTarget || targetCabinet)) candidates.Add(card.gameObject);
         GameObject cardToClose = candidates.LastOrDefault();
         if (cardToClose == null)
         {
@@ -646,6 +593,7 @@ public sealed class VoiceRouter : MonoBehaviour
         return true;
     }
 
+    // Прокручивает доступный на текущем экране ScrollRect.
     private bool TryHandleScroll(string phrase, out string action)
     {
         action = null;
@@ -669,6 +617,7 @@ public sealed class VoiceRouter : MonoBehaviour
         return true;
     }
 
+    // Передаёт в калькулятор отдельную команду кнопки или целое выражение.
     private bool TryHandleCalculator(string raw, string phrase, out string action)
     {
         action = null;
@@ -687,7 +636,7 @@ public sealed class VoiceRouter : MonoBehaviour
         string key = null;
         if (Has(phrase, "очистить калькулятор", "сбросить калькулятор", "стереть всё")) key = "C";
         else if (Has(phrase, "разделить", "делить", "деление", "поделить", "÷")) key = "/";
-        else if (Has(phrase, "умножить", "умножение", "умножение", "times", "звёздочка")) key = "*";
+        else if (Has(phrase, "умножить", "умножение", "times", "звёздочка")) key = "*";
         else if (Has(phrase, "плюс", "прибавить", "plus")) key = "+";
         else if (Has(phrase, "минус", "вычесть", "minus")) key = "-";
         else if (Has(phrase, "равно", "посчитать", "вычислить", "результат", "equals")) key = "=";
@@ -702,6 +651,7 @@ public sealed class VoiceRouter : MonoBehaviour
         return true;
     }
 
+    // Преобразует произнесённый пример в строку вроде 80/8 для калькулятора.
     private static bool TryParseSpokenExpression(string raw, out string expression)
     {
         string value = raw.ToLowerInvariant().Trim();
@@ -720,7 +670,8 @@ public sealed class VoiceRouter : MonoBehaviour
         return isExpression;
     }
 
-    private bool TryPressSpokenButton(string raw, string phrase, out string action)
+    // Последний общий способ: найти кнопку по её подписи и вызвать её событие.
+    private bool TryPressSpokenButton(string phrase, out string action)
     {
         string target = phrase;
         bool explicitPress = target.StartsWith("нажми ", StringComparison.Ordinal) || target.StartsWith("нажать ", StringComparison.Ordinal) ||
@@ -770,6 +721,7 @@ public sealed class VoiceRouter : MonoBehaviour
         return false;
     }
 
+    /// <summary>Возвращает выбранное поле либо ранее выбранное поле, если оно ещё доступно.</summary>
     private TMP_InputField GetCurrentInput()
     {
         GameObject selected = EventSystem.current != null ? EventSystem.current.currentSelectedGameObject : null;
@@ -781,11 +733,13 @@ public sealed class VoiceRouter : MonoBehaviour
         return null;
     }
 
+    /// <summary>Проверяет, начинается ли фраза с команды ввода текста.</summary>
     private static bool IsTextEntryPhrase(string phrase) =>
         phrase.StartsWith("введи ", StringComparison.Ordinal) || phrase.StartsWith("введите ", StringComparison.Ordinal) ||
         phrase.StartsWith("напиши ", StringComparison.Ordinal) || phrase.StartsWith("впиши ", StringComparison.Ordinal) ||
         phrase.StartsWith("диктуй ", StringComparison.Ordinal) || phrase.StartsWith("type ", StringComparison.Ordinal);
 
+    /// <summary>Убирает командное слово и возвращает текст, который нужно поместить в поле.</summary>
     private static bool TryExtractEntryValue(string raw, out string value)
     {
         string trimmed = raw.Trim();
@@ -802,6 +756,7 @@ public sealed class VoiceRouter : MonoBehaviour
         return false;
     }
 
+    /// <summary>Находит активное поле ввода по подписи, имени или части названия.</summary>
     private static TMP_InputField FindInputByLabel(string requestedLabel)
     {
         string target = Normalize(requestedLabel);
@@ -817,6 +772,7 @@ public sealed class VoiceRouter : MonoBehaviour
             .FirstOrDefault(field => Normalize(GetInputLabel(field)).Contains(target) || Normalize(field.gameObject.name).Contains(target) || target.Contains(Normalize(GetInputLabel(field))));
     }
 
+    /// <summary>Возвращает подсказку поля или его имя в сцене.</summary>
     private static string GetInputLabel(TMP_InputField field)
     {
         TMP_Text placeholder = field.placeholder as TMP_Text;
@@ -824,23 +780,27 @@ public sealed class VoiceRouter : MonoBehaviour
         return field.gameObject.name;
     }
 
+    /// <summary>Определяет поле пароля, чтобы не выводить его содержимое в сообщениях.</summary>
     private static bool IsPasswordField(TMP_InputField field)
     {
         return field.contentType == TMP_InputField.ContentType.Password || Normalize(GetInputLabel(field)).Contains("пароль");
     }
 
+    /// <summary>Ищет активный выпадающий список по имени объекта.</summary>
     private TMP_Dropdown FindDropdown(string name)
     {
         return FindObjectsByType<TMP_Dropdown>(FindObjectsInactive.Include)
             .FirstOrDefault(dropdown => dropdown != null && dropdown.gameObject.activeInHierarchy && Normalize(dropdown.gameObject.name).Contains(Normalize(name)));
     }
 
+    /// <summary>Находит доступный выпадающий список на текущем экране.</summary>
     private static TMP_Dropdown FindVisibleDropdown()
     {
         return FindObjectsByType<TMP_Dropdown>(FindObjectsInactive.Include)
             .FirstOrDefault(dropdown => dropdown != null && dropdown.gameObject.activeInHierarchy && dropdown.IsInteractable());
     }
 
+    /// <summary>Находит список, содержащий вариант с произнесённым названием.</summary>
     private static TMP_Dropdown FindDropdownContainingOption(string requested)
     {
         string target = Normalize(requested);
@@ -851,6 +811,7 @@ public sealed class VoiceRouter : MonoBehaviour
             .FirstOrDefault(dropdown => dropdown.options.Any(option => Normalize(option.text) == target || Normalize(option.text).Contains(target) || target.Contains(Normalize(option.text))));
     }
 
+    /// <summary>Возвращает понятное название списка для сообщения пользователю.</summary>
     private static string GetDropdownLabel(TMP_Dropdown dropdown)
     {
         string objectName = Normalize(dropdown.gameObject.name);
@@ -860,6 +821,7 @@ public sealed class VoiceRouter : MonoBehaviour
             : dropdown.gameObject.name;
     }
 
+    /// <summary>Возвращает индекс точного или ближайшего совпадения среди вариантов списка.</summary>
     private static int FindDropdownOption(TMP_Dropdown dropdown, string requested)
     {
         string target = Normalize(requested);
@@ -868,6 +830,7 @@ public sealed class VoiceRouter : MonoBehaviour
         return dropdown.options.FindIndex(option => Normalize(option.text).Contains(target) || target.Contains(Normalize(option.text)));
     }
 
+    /// <summary>Пробует найти и нажать кнопку по нескольким возможным именам.</summary>
     private static bool PressAny(IEnumerable<string> names, out string action)
     {
         foreach (string name in names)
@@ -876,6 +839,7 @@ public sealed class VoiceRouter : MonoBehaviour
         return false;
     }
 
+    /// <summary>Находит доступную кнопку по имени объекта или тексту на ней и вызывает её событие.</summary>
     private static bool TryPressButton(string target, out string action)
     {
         string normalizedTarget = Normalize(target);
@@ -908,21 +872,23 @@ public sealed class VoiceRouter : MonoBehaviour
         return true;
     }
 
-    private static bool SpawnImageCard(string buttonName, out string action)
+    // Находит кнопку по имени даже в закрытом меню и использует её общий обработчик.
+    private static bool SelectCardButton(string buttonName, out string action)
     {
-        ImageButtonHook button = FindObjectsByType<ImageButtonHook>(FindObjectsInactive.Include)
+        ARCardButtonHook button = FindObjectsByType<ARCardButtonHook>(FindObjectsInactive.Include)
             .FirstOrDefault(hook => hook != null && hook.gameObject.name == buttonName);
         if (button == null)
         {
-            action = "Кнопка карточки не найдена";
-            return true;
+            action = "Карточка «" + buttonName + "» не добавлена в меню сцены";
+            return false;
         }
 
-        button.SpawnCard();
+        button.SelectFromVoice();
         action = "Выбрана AR-карточка «" + GetButtonText(button.GetComponent<Button>()) + "»";
         return true;
     }
 
+    /// <summary>Возвращает текст кнопки из TMP, обычного текста или имени объекта.</summary>
     private static string GetButtonText(Button button)
     {
         if (button == null) return "";
@@ -932,41 +898,36 @@ public sealed class VoiceRouter : MonoBehaviour
         return legacy != null && !string.IsNullOrWhiteSpace(legacy.text) ? legacy.text.Trim() : button.gameObject.name;
     }
 
+    /// <summary>Собирает открытые карточки, на которые должна повлиять команда изменения размера.</summary>
     private static List<Transform> GetOpenCardTransforms(string phrase)
     {
         var cards = new HashSet<Transform>();
         bool targetCalculator = Has(phrase, "калькулятор", "calculator");
         bool targetInventory = Has(phrase, "инвентаризац", "чек лист", "чеклист", "проверка шкафа");
         bool targetCabinet = Has(phrase, "шкаф", "фото", "лист");
-        bool targetProduct = Has(phrase, "продукц", "информац");
-        bool hasTarget = targetCalculator || targetInventory || targetCabinet || targetProduct;
+        bool hasTarget = targetCalculator || targetInventory || targetCabinet;
         foreach (CalculatorController card in FindObjectsByType<CalculatorController>(FindObjectsInactive.Include))
             if (card != null && card.gameObject.activeInHierarchy && (!hasTarget || targetCalculator)) cards.Add(card.transform);
         foreach (ImageCardController card in FindObjectsByType<ImageCardController>(FindObjectsInactive.Include))
-            if (card != null && card.gameObject.activeInHierarchy && (!hasTarget || (card.CabinetViewOnly ? targetCabinet || targetInventory : targetProduct))) cards.Add(card.transform);
+            if (card != null && card.gameObject.activeInHierarchy && (!hasTarget || targetCabinet || targetInventory)) cards.Add(card.transform);
         foreach (InventoryChecklistController card in FindObjectsByType<InventoryChecklistController>(FindObjectsInactive.Include))
             if (card != null && card.gameObject.activeInHierarchy && (!hasTarget || targetInventory)) cards.Add(card.transform);
-        foreach (WebCardController card in FindObjectsByType<WebCardController>(FindObjectsInactive.Include))
-            if (card != null && card.gameObject.activeInHierarchy && (!hasTarget || Has(phrase, "веб", "сайт", "страниц"))) cards.Add(card.transform);
         return cards.ToList();
     }
 
+    /// <summary>Определяет название карточки для подтверждающего сообщения.</summary>
     private static string GetCardTargetLabel(string phrase)
     {
         if (Has(phrase, "калькулятор", "calculator")) return "Калькулятор";
         if (Has(phrase, "инвентаризац", "чек лист", "чеклист")) return "Инвентаризация";
         if (Has(phrase, "шкаф", "фото", "лист")) return "Шкаф";
-        if (Has(phrase, "продукц", "информац")) return "Информация о продукции";
-        if (Has(phrase, "веб", "сайт", "страниц")) return "Веб";
         return "все открытые AR";
     }
 
+    // Закрывает все активные карточки перед выходом из AR-сцены.
     private static void CloseAllCards()
     {
-        if (WebOverlayController.Instance != null) WebOverlayController.Instance.Close();
         foreach (CalculatorController card in FindObjectsByType<CalculatorController>(FindObjectsInactive.Include))
-            if (card != null) ARCardModeSelector.CloseCard(card.gameObject);
-        foreach (WebCardController card in FindObjectsByType<WebCardController>(FindObjectsInactive.Include))
             if (card != null) ARCardModeSelector.CloseCard(card.gameObject);
         foreach (ImageCardController card in FindObjectsByType<ImageCardController>(FindObjectsInactive.Include))
             if (card != null) ARCardModeSelector.CloseCard(card.gameObject);
@@ -974,12 +935,14 @@ public sealed class VoiceRouter : MonoBehaviour
             if (card != null) ARCardModeSelector.CloseCard(card.gameObject);
     }
 
+    /// <summary>Приводит текст к нижнему регистру и заменяет знаки препинания пробелами.</summary>
     private static string Normalize(string value)
     {
         if (string.IsNullOrWhiteSpace(value)) return string.Empty;
         return Regex.Replace(value.ToLowerInvariant(), @"[^\p{L}\p{Nd}]+", " ").Trim();
     }
 
+    /// <summary>Проверяет, содержит ли нормализованная фраза один из заданных вариантов команды.</summary>
     private static bool Has(string phrase, params string[] parts)
     {
         foreach (string part in parts)
@@ -987,6 +950,7 @@ public sealed class VoiceRouter : MonoBehaviour
         return false;
     }
 
+    // Показывает краткий результат команды в подсказке и журнале Unity.
     private static void Report(string action)
     {
         if (VoiceHelpController.Instance != null)

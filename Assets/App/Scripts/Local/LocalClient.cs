@@ -6,10 +6,13 @@ using System.Text.RegularExpressions;
 
 namespace ArInventory.Local
 {
+    /// <summary>Проверяет вход и записывает пользовательские события в локальную базу.</summary>
     public class LocalClient : MonoBehaviour
     {
+        /// <summary>Единственный постоянно работающий клиент локальных данных.</summary>
         public static LocalClient Instance { get; private set; }
 
+        /// <summary>Оставляет один экземпляр клиента при переходах между сценами.</summary>
         private void Awake()
         {
             if (Instance != null && Instance != this)
@@ -22,6 +25,7 @@ namespace ArInventory.Local
             DontDestroyOnLoad(gameObject);
         }
 
+        /// <summary>Возвращает существующий клиент или создаёт его при необходимости.</summary>
         public static LocalClient GetOrCreate()
         {
             if (Instance != null)
@@ -32,6 +36,7 @@ namespace ArInventory.Local
             return Instance;
         }
 
+        /// <summary>Получает список отделов из активных пользователей локальной базы.</summary>
         public void GetDepartments(Action<List<string>> onSuccess, Action<string> onError)
         {
             if (!LocalDatabase.Instance.IsReady)
@@ -52,11 +57,12 @@ namespace ArInventory.Local
             onSuccess?.Invoke(names);
         }
 
+        /// <summary>Проверяет пользователя и пароль по локальной базе, чтобы вход работал офлайн.</summary>
         public void Login(
             string fullName,
             string department,
             string password,
-            Action<LoginResponse> onSuccess,
+            Action<LocalLoginResult> onSuccess,
             Action<string> onError)
         {
             if (!LocalDatabase.Instance.IsReady)
@@ -82,7 +88,7 @@ namespace ArInventory.Local
                 return;
             }
 
-            // Проверяем пароль через BCrypt
+            // Пароль хранится как BCrypt-хеш; сравниваем его, не восстанавливая исходный текст.
             bool passwordOk;
             try
             {
@@ -101,7 +107,7 @@ namespace ArInventory.Local
                 return;
             }
 
-            // Записываем действие входа
+            // Вход сохраняется в локальную очередь для общего журнала сервера.
             var session = new LocalInventorySession
             {
                 user_id = user.id,
@@ -111,23 +117,21 @@ namespace ArInventory.Local
             };
             LocalDatabase.Instance.Connection.Insert(session);
 
-            var response = new LoginResponse
+            var response = new LocalLoginResult
             {
-                success = true,
-                message = "Вход выполнен",
                 userId = (int)user.id,
                 fullName = user.full_name,
-                department = user.department,
-                loginActionId = (int)session.id
+                department = user.department
             };
 
-            SessionManager.SetUser((int)user.id, user.full_name, user.department);
+            SessionManager.SetUser((int)user.id, user.full_name);
             onSuccess?.Invoke(response);
         }
 
+        /// <summary>Добавляет сканирование QR-кода в локальный журнал.</summary>
         public void SendScan(
             string qrCode,
-            Action<ScanResponse> onSuccess,
+            Action<LocalScanResult> onSuccess,
             Action<string> onError)
         {
             if (!LocalDatabase.Instance.IsReady)
@@ -154,7 +158,7 @@ namespace ArInventory.Local
                 return;
             }
 
-            // Проверяем повтор
+            // Повтором считается сканирование того же QR этим же пользователем.
             bool alreadyScanned = LocalDatabase.Instance.Connection
                 .Table<LocalInventorySession>()
                 .Where(s =>
@@ -176,19 +180,16 @@ namespace ArInventory.Local
 
             LocalDatabase.Instance.Connection.Insert(session);
 
-            var response = new ScanResponse
+            var response = new LocalScanResult
             {
-                success = true,
-                message = "QR обработан",
-                scanId = (int)session.id,
                 objectName = qr.object_name,
-                result = alreadyScanned ? "duplicate" : "ok"
+                wasRepeated = alreadyScanned
             };
 
             onSuccess?.Invoke(response);
         }
 
-        // Записывает завершённое вычисление как действие calc в журнал.
+        /// <summary>Записывает завершённый расчёт как действие calc в локальный журнал.</summary>
         public void LogCalculator(
             string expression,
             string result,
@@ -207,7 +208,7 @@ namespace ArInventory.Local
                 return;
             }
 
-            // Ищем QR-код калькулятора, чтобы привязать запись к нему
+            // Если для калькулятора создан отдельный QR, прикрепляем его к записи журнала.
             LocalQrCode calcQr = LocalDatabase.Instance.Connection
                 .Table<LocalQrCode>()
                 .ToList()
@@ -226,7 +227,7 @@ namespace ArInventory.Local
             onSuccess?.Invoke();
         }
 
-        // Оставляет только буквы (убирает пробелы, точки, регистр)
+        /// <summary>Убирает пробелы и знаки препинания для сравнения ФИО и названий отделов.</summary>
         private static string CleanString(string s)
         {
             if (string.IsNullOrEmpty(s))
@@ -237,16 +238,4 @@ namespace ArInventory.Local
         }
     }
 
-    public static class LocalDatabaseExt
-    {
-        public static LocalDatabase GetOrCreate()
-        {
-            if (LocalDatabase.Instance != null)
-                return LocalDatabase.Instance;
-
-            GameObject go = new GameObject("LocalDatabase");
-            go.AddComponent<LocalDatabase>();
-            return LocalDatabase.Instance;
-        }
-    }
 }

@@ -4,18 +4,23 @@ using System.Linq;
 using UnityEngine;
 using UnityEngine.UI;
 
-/// <summary>Provides a common Overlay / AR placement choice for non-web cards.</summary>
+/// <summary>Показывает выбор между экранным окном и размещением AR-карточки в пространстве.</summary>
 public static class ARCardModeSelector
 {
+    // Ссылка нужна, чтобы перед показом нового окна закрыть предыдущее.
     private static GameObject dialog;
+
+    // Список открытых экранных карточек нужен для ограничения числа окон и поиска дубликатов.
     private static readonly List<GameObject> overlays = new();
 
+    /// <summary>Проверяет, открыта ли экранная копия выбранной карточки.</summary>
     public static bool HasOverlay(GameObject prefab)
     {
         overlays.RemoveAll(item => item == null);
         return overlays.Any(item => item.name == prefab.name + " (Overlay)");
     }
 
+    /// <summary>Показывает пользователю варианты отображения карточки.</summary>
     public static void Show(GameObject prefab)
     {
         if (prefab == null)
@@ -65,6 +70,7 @@ public static class ARCardModeSelector
         AddButton(panel, "Отмена", new Color(.30f, .34f, .41f), CloseDialog);
     }
 
+    /// <summary>Создаёт экранное окно карточки и добавляет кнопки изменения масштаба.</summary>
     private static void ShowOverlay(GameObject prefab)
     {
         overlays.RemoveAll(item => item == null);
@@ -113,7 +119,7 @@ public static class ARCardModeSelector
         foreach (var behaviour in card.GetComponents<Behaviour>())
         {
             if (behaviour is InventoryChecklistController || behaviour is ImageCardController ||
-                behaviour is CalculatorController || behaviour is WebCardController) continue;
+                behaviour is CalculatorController) continue;
             behaviour.enabled = false;
         }
 
@@ -183,6 +189,7 @@ public static class ARCardModeSelector
         bar.anchoredPosition = position + new Vector2(0f, card.sizeDelta.y * scale * .5f + 48f);
     }
 
+    /// <summary>Закрывает карточку или всё экранное окно, которому она принадлежит.</summary>
     public static void CloseCard(GameObject card)
     {
         if (card == null) return;
@@ -196,6 +203,7 @@ public static class ARCardModeSelector
         else UnityEngine.Object.Destroy(card);
     }
 
+    /// <summary>Закрывает диалог выбора режима, если он сейчас открыт.</summary>
     internal static void CloseDialog()
     {
         if (dialog != null) UnityEngine.Object.Destroy(dialog);
@@ -248,13 +256,12 @@ public static class ARCardModeSelector
         rect.gameObject.AddComponent<LayoutElement>().preferredHeight = 112f;
     }
 
+    /// <summary>Возвращает короткое название карточки для диалога выбора режима.</summary>
     private static string GetDisplayName(GameObject prefab)
     {
         if (prefab.GetComponent<InventoryChecklistController>() != null) return "инвентаризацию";
-        if (prefab.TryGetComponent<ImageCardController>(out var imageCard))
-            return imageCard.CabinetViewOnly ? "фото шкафа" : "информационную карточку";
+        if (prefab.GetComponent<ImageCardController>() != null) return "фото шкафа";
         if (prefab.GetComponent<CalculatorController>() != null) return "калькулятор";
-        if (prefab.GetComponent<WebCardController>() != null) return "веб-страницу";
         return prefab.name;
     }
 
