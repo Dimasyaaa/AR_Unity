@@ -85,6 +85,7 @@ public static class InventoryEndpoints
         })
         .WithTags("Inventory")
         .WithSummary("Синхронизировать завершённые инвентаризации")
+        .WithDescription("Принимает сохранённые офлайн-проверки. Для отчёта с вложениями нужна хотя бы одна фотография; голосовой комментарий можно не записывать. Повторная отправка безопасна благодаря clientRunId.")
         .Produces(200).Produces(400);
 
         return endpoints;

@@ -4,11 +4,19 @@ using Npgsql;
 
 namespace Backend.Data;
 
+/// <summary>Итог атомарного удаления QR-кода и связанных данных.</summary>
+public sealed record QrDeletionResult(
+    bool QrFound,
+    bool CabinetFound,
+    int DeletedRunItems,
+    int DeletedRuns,
+    int DeletedChecklistItems,
+    int DeletedPhotos,
+    int DeletedEvents);
+
 /// <summary>
-/// Слой для сложного транзакционного удаления QR-кодов.
-/// Вынесен отдельно, потому что удаление QR может требовать каскадного удаления 
-/// связанного шкафа (cabinet_profiles), его чек-листов, фото и истории инвентаризаций.
-/// Это точная копия логики метода DeleteQrDependencies из старого InventoryApi.cs.
+/// Удаляет QR-код и его историю одной транзакцией, чтобы ошибка не оставляла
+/// базу в частично очищенном состоянии.
 /// </summary>
 public class QrDeletionRepository
 {
@@ -17,83 +25,93 @@ public class QrDeletionRepository
     public QrDeletionRepository(NpgsqlDataSource dataSource) => _dataSource = dataSource;
 
     /// <summary>
-    /// Транзакционное удаление зависимостей QR-кода.
+    /// Удаляет QR-код, шкаф (если он есть), чек-лист и историю инвентаризаций.
+    /// Если requireCabinet равен true, отсутствие шкафа отменяет транзакцию.
     /// </summary>
-    /// <param name="qrCodeId">ID удаляемого QR-кода.</param>
-    /// <param name="requireCabinet">Если true, и шкафа нет, операция отменяется (возвращает null).</param>
-    /// <returns>Кортеж с количеством удаленных записей по таблицам, или null, если операция прервана.</returns>
-    public async Task<(long? CabinetId, int DeletedRunItems, int DeletedRuns, int DeletedChecklistItems, int DeletedPhotos, int DeletedEvents)?> 
-        DeleteQrDependenciesAsync(long qrCodeId, bool requireCabinet)
+    public async Task<QrDeletionResult> DeleteQrAndDependenciesAsync(long qrCodeId, bool requireCabinet)
     {
         await using var conn = await _dataSource.OpenConnectionAsync();
         await using var transaction = await conn.BeginTransactionAsync();
 
-        long? cabinetId = null;
+        // Блокируем QR на время удаления, чтобы параллельный запрос не изменил его.
+        await using var qrCmd = new NpgsqlCommand(
+            "SELECT id FROM qr_codes WHERE id = @qrCodeId FOR UPDATE", conn, transaction);
+        qrCmd.Parameters.AddWithValue("qrCodeId", qrCodeId);
+        if (await qrCmd.ExecuteScalarAsync() is null)
+        {
+            await transaction.RollbackAsync();
+            return new QrDeletionResult(false, false, 0, 0, 0, 0, 0);
+        }
 
-        // 1. Проверяем, привязан ли к этому QR-коду шкаф
-        await using var cabinetCmd = new NpgsqlCommand(
-            "SELECT id FROM cabinet_profiles WHERE qr_code_id = @qrCodeId", conn, transaction);
-        cabinetCmd.Parameters.AddWithValue("qrCodeId", qrCodeId);
-        var cabinetResult = await cabinetCmd.ExecuteScalarAsync();
-        
-        if (cabinetResult != null)
-            cabinetId = Convert.ToInt64(cabinetResult);
+        // Сначала узнаём шкаф, чтобы связанные с ним данные удалить в том же порядке.
+        long? cabinetId;
+        await using (var cabinetCmd = new NpgsqlCommand(
+            "SELECT id FROM cabinet_profiles WHERE qr_code_id = @qrCodeId FOR UPDATE", conn, transaction))
+        {
+            cabinetCmd.Parameters.AddWithValue("qrCodeId", qrCodeId);
+            var cabinetResult = await cabinetCmd.ExecuteScalarAsync();
+            cabinetId = cabinetResult is null ? null : Convert.ToInt64(cabinetResult);
+        }
 
-        // Если шкаф обязателен, но его нет — откатываем транзакцию и возвращаем null
         if (requireCabinet && cabinetId is null)
         {
             await transaction.RollbackAsync();
-            return null;
+            return new QrDeletionResult(true, false, 0, 0, 0, 0, 0);
         }
 
-        // 2. Удаляем элементы инвентаризации (inventory_run_items), связанные с этим QR или шкафом
+        // Отметки ссылаются на чек-лист с RESTRICT, поэтому их удаляем до истории.
         var cabinetRunFilter = cabinetId.HasValue ? " OR run.cabinet_id = @cabinetId" : string.Empty;
         int deletedRunItems;
-        await using var deleteRunItemsCmd = new NpgsqlCommand($@"
+        await using (var deleteRunItemsCmd = new NpgsqlCommand($@"
             DELETE FROM inventory_run_items item
             USING inventory_runs run
             WHERE item.inventory_run_id = run.id
-              AND (run.qr_code_id = @qrCodeId{cabinetRunFilter})
-        ", conn, transaction);
-        
-        deleteRunItemsCmd.Parameters.AddWithValue("qrCodeId", qrCodeId);
-        if (cabinetId.HasValue)
-            deleteRunItemsCmd.Parameters.AddWithValue("cabinetId", cabinetId.Value);
-        deletedRunItems = await deleteRunItemsCmd.ExecuteNonQueryAsync();
+              AND (run.qr_code_id = @qrCodeId{cabinetRunFilter})", conn, transaction))
+        {
+            deleteRunItemsCmd.Parameters.AddWithValue("qrCodeId", qrCodeId);
+            if (cabinetId.HasValue)
+                deleteRunItemsCmd.Parameters.AddWithValue("cabinetId", cabinetId.Value);
+            deletedRunItems = await deleteRunItemsCmd.ExecuteNonQueryAsync();
+        }
 
-        // 3. Удаляем сами записи инвентаризации (inventory_runs)
+        // Удаление истории каскадно удалит её медиа-вложения и остальные дочерние записи.
         var cabinetDeleteFilter = cabinetId.HasValue ? " OR cabinet_id = @cabinetId" : string.Empty;
         int deletedRuns;
-        await using var deleteRunsCmd = new NpgsqlCommand(
-            $"DELETE FROM inventory_runs WHERE qr_code_id = @qrCodeId{cabinetDeleteFilter}", conn, transaction);
-        
-        deleteRunsCmd.Parameters.AddWithValue("qrCode aId", qrCodeId); // Исправлена опечатка оригинала: qrCodeId
-        deleteRunsCmd.Parameters.AddWithValue("qrCodeId", qrCodeId);
-        if (cabinetId.HasValue)
-            deleteRunsCmd.Parameters.AddWithValue("cabinetId", cabinetId.Value);
-        deletedRuns = await deleteRunsCmd.ExecuteNonQueryAsync();
+        await using (var deleteRunsCmd = new NpgsqlCommand(
+            $"DELETE FROM inventory_runs WHERE qr_code_id = @qrCodeId{cabinetDeleteFilter}", conn, transaction))
+        {
+            deleteRunsCmd.Parameters.AddWithValue("qrCodeId", qrCodeId);
+            if (cabinetId.HasValue)
+                deleteRunsCmd.Parameters.AddWithValue("cabinetId", cabinetId.Value);
+            deletedRuns = await deleteRunsCmd.ExecuteNonQueryAsync();
+        }
 
         int deletedChecklistItems = 0;
         int deletedPhotos = 0;
         int deletedEvents = 0;
 
-        // 4. Если был шкаф, удаляем его внутренности
         if (cabinetId.HasValue)
         {
-            await using var deleteChecklistCmd = new NpgsqlCommand(
-                "DELETE FROM cabinet_checklist_items WHERE cabinet_id = @cabinetId", conn, transaction);
-            deleteChecklistCmd.Parameters.AddWithValue("cabinetId", cabinetId.Value);
-            deletedChecklistItems = await deleteChecklistCmd.ExecuteNonQueryAsync();
+            await using (var deleteChecklistCmd = new NpgsqlCommand(
+                "DELETE FROM cabinet_checklist_items WHERE cabinet_id = @cabinetId", conn, transaction))
+            {
+                deleteChecklistCmd.Parameters.AddWithValue("cabinetId", cabinetId.Value);
+                deletedChecklistItems = await deleteChecklistCmd.ExecuteNonQueryAsync();
+            }
 
-            await using var deletePhotosCmd = new NpgsqlCommand(
-                "DELETE FROM cabinet_photos WHERE cabinet_id = @cabinetId", conn, transaction);
-            deletePhotosCmd.Parameters.AddWithValue("cabinetId", cabinetId.Value);
-            deletedPhotos = await deletePhotosCmd.ExecuteNonQueryAsync();
+            await using (var deletePhotosCmd = new NpgsqlCommand(
+                "DELETE FROM cabinet_photos WHERE cabinet_id = @cabinetId", conn, transaction))
+            {
+                deletePhotosCmd.Parameters.AddWithValue("cabinetId", cabinetId.Value);
+                deletedPhotos = await deletePhotosCmd.ExecuteNonQueryAsync();
+            }
 
-            await using var deleteEventsCmd = new NpgsqlCommand(
-                "DELETE FROM inventory_sessions WHERE qr_code_id = @qrCodeId", conn, transaction);
-            deleteEventsCmd.Parameters.AddWithValue("qrCodeId", qrCodeId);
-            deletedEvents = await deleteEventsCmd.ExecuteNonQueryAsync();
+            await using (var deleteEventsCmd = new NpgsqlCommand(
+                "DELETE FROM inventory_sessions WHERE qr_code_id = @qrCodeId", conn, transaction))
+            {
+                deleteEventsCmd.Parameters.AddWithValue("qrCodeId", qrCodeId);
+                deletedEvents = await deleteEventsCmd.ExecuteNonQueryAsync();
+            }
 
             await using var deleteCabinetCmd = new NpgsqlCommand(
                 "DELETE FROM cabinet_profiles WHERE id = @cabinetId", conn, transaction);
@@ -101,9 +119,18 @@ public class QrDeletionRepository
             await deleteCabinetCmd.ExecuteNonQueryAsync();
         }
 
-        // 5. Коммитим транзакцию (сам QR-код удаляется в эндпоинте после этого вызова)
-        await transaction.CommitAsync();
+        // Сам QR удаляем последним, но до COMMIT той же транзакции.
+        await using (var deleteQrCmd = new NpgsqlCommand(
+            "DELETE FROM qr_codes WHERE id = @qrCodeId", conn, transaction))
+        {
+            deleteQrCmd.Parameters.AddWithValue("qrCodeId", qrCodeId);
+            if (await deleteQrCmd.ExecuteNonQueryAsync() == 0)
+                throw new InvalidOperationException("QR-код исчез во время удаления.");
+        }
 
-        return (cabinetId, deletedRunItems, deletedRuns, deletedChecklistItems, deletedPhotos, deletedEvents);
+        await transaction.CommitAsync();
+        return new QrDeletionResult(
+            true, cabinetId.HasValue, deletedRunItems, deletedRuns,
+            deletedChecklistItems, deletedPhotos, deletedEvents);
     }
 }

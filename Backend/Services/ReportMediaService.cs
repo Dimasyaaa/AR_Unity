@@ -21,10 +21,10 @@ public static class ReportMediaService
 
     /// <summary>
     /// Извлекает и валидирует медиа из запроса синхронизации.
-    /// Возвращает кортеж (список JPEG, WAV) или null, если медиа нет вообще.
+    /// Возвращает список JPEG и необязательный WAV либо null, если вложений нет.
     /// Бросает ArgumentException при нарушении формата/размера — эндпоинт превратит это в 400.
     /// </summary>
-    public static (List<byte[]> Photos, byte[] Voice)? ExtractReportMedia(
+    public static (List<byte[]> Photos, byte[]? Voice)? ExtractReportMedia(
         List<string>? photosBase64,
         string? singlePhotoBase64,
         string? voiceBase64)
@@ -42,8 +42,13 @@ public static class ReportMediaService
             throw new ArgumentException("В отчёте допускается не более 5 фотографий.");
 
         // Если нет ни фото, ни голоса — медиа-блок отсутствует (это не ошибка, просто чек-лист)
-        if (encodedPhotos.Count == 0 && string.IsNullOrEmpty(voiceBase64))
+        bool hasVoice = !string.IsNullOrWhiteSpace(voiceBase64);
+        if (encodedPhotos.Count == 0 && !hasVoice)
             return null;
+
+        // Голосовой комментарий дополняет фото, но не заменяет обязательную фотофиксацию.
+        if (encodedPhotos.Count == 0)
+            throw new ArgumentException("Добавьте хотя бы одну фотографию к отчёту.");
 
         // Декодируем и проверяем каждую фотографию
         var photos = encodedPhotos
@@ -63,11 +68,15 @@ public static class ReportMediaService
             throw new ArgumentException("Проверка пропущена: ожидается JPEG для каждой фотографии.");
         }
 
-        // Декодируем и проверяем голосовое сообщение
-        byte[] voice = DecodeAttachment(voiceBase64, MaxReportVoiceBytes, "голосовое сообщение");
+        // Голос необязателен: проверяем WAV только если пользователь его записал.
+        byte[]? voice = null;
+        if (hasVoice)
+        {
+            voice = DecodeAttachment(voiceBase64, MaxReportVoiceBytes, "голосовое сообщение");
 
-        // Полная валидация WAV-заголовка (RIFF/WAVE/fmt /data, 16 kHz, mono, 16-bit PCM)
-        ValidateWavHeader(voice);
+            // Полная валидация WAV-заголовка (RIFF/WAVE/fmt /data, 16 kHz, mono, 16-bit PCM).
+            ValidateWavHeader(voice);
+        }
 
         return (photos, voice);
     }

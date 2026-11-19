@@ -78,7 +78,7 @@ public class InventorySyncService
         if (run.items.Any(item => item.itemId <= 0 || (item.status != "present" && item.status != "missing")))
             throw new ArgumentException("Проверка пропущена: для каждого предмета выберите «Есть» или «Нет».");
 
-        // 2. Декодирование и валидация медиа (фото + голос)
+        // 2. Проверяем фото и, если пользователь его записал, голосовой комментарий.
         var media = ReportMediaService.ExtractReportMedia(run.photosBase64, run.photoBase64, run.voiceBase64);
 
         // 3. Начинаем транзакцию
@@ -165,13 +165,21 @@ public class InventorySyncService
             return SaveRunResult.Duplicate;
         }
 
-        // 10. Сохранение медиа (если есть)
+        // 10. Сохраняем фотографии и необязательный голос в общей таблице вложений.
         if (media is { } attachments)
         {
-            await _runRepository.InsertRunMediaAsync(conn, transaction, inventoryRunId, attachments.Photos[0], attachments.Voice);
-            for (int photoIndex = 1; photoIndex < attachments.Photos.Count; photoIndex++)
+            for (int photoIndex = 0; photoIndex < attachments.Photos.Count; photoIndex++)
             {
-                await _runRepository.InsertRunPhotoAsync(conn, transaction, inventoryRunId, photoIndex, attachments.Photos[photoIndex]);
+                await _runRepository.InsertRunAttachmentAsync(
+                    conn, transaction, inventoryRunId, "photo", photoIndex,
+                    "image/jpeg", attachments.Photos[photoIndex]);
+            }
+
+            if (attachments.Voice is { Length: > 0 } voice)
+            {
+                await _runRepository.InsertRunAttachmentAsync(
+                    conn, transaction, inventoryRunId, "voice", 0,
+                    "audio/wav", voice);
             }
         }
 

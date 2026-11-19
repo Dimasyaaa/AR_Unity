@@ -124,25 +124,21 @@ public static class AdminInventoryEndpoints
         .WithSummary("Создать или обновить карточку шкафа, фотографию и перечень")
         .Produces(200).Produces(400).Produces(404);
 
-        endpoints.MapDelete("/api/admin/inventory/cabinets/{qrCodeId:long}", async (long qrCodeId, QrDeletionRepository qrDeletion, QrRepository qrRepo) =>
+        endpoints.MapDelete("/api/admin/inventory/cabinets/{qrCodeId:long}", async (long qrCodeId, QrDeletionRepository qrDeletion) =>
         {
-            var deletion = await qrDeletion.DeleteQrDependenciesAsync(qrCodeId, requireCabinet: true);
-            if (deletion is null)
-                return Results.NotFound(new { success = false, message = "Шкаф не найден" });
-
-            var deleted = await qrRepo.DeleteByIdAsync(qrCodeId);
-            if (!deleted)
+            var deletion = await qrDeletion.DeleteQrAndDependenciesAsync(qrCodeId, requireCabinet: true);
+            if (!deletion.QrFound || !deletion.CabinetFound)
                 return Results.NotFound(new { success = false, message = "Шкаф не найден" });
 
             return Results.Ok(new
             {
                 success = true,
                 message = "Шкаф, его QR-код и история удалены",
-                deletion.Value.DeletedRunItems,
-                deletion.Value.DeletedRuns,
-                deletion.Value.DeletedChecklistItems,
-                deletion.Value.DeletedPhotos,
-                deletion.Value.DeletedEvents
+                deletion.DeletedRunItems,
+                deletion.DeletedRuns,
+                deletion.DeletedChecklistItems,
+                deletion.DeletedPhotos,
+                deletion.DeletedEvents
             });
         })
         .WithTags("Admin: Inventory")
@@ -171,11 +167,11 @@ public static class AdminInventoryEndpoints
         endpoints.MapGet("/api/admin/inventory/runs/{runId:long}/media/photo/{index:int}", async (long runId, int index, HttpContext context, InventoryRunRepository runRepo) =>
         {
             if (index < 0 || index > 4) return Results.NotFound();
-            var bytes = await runRepo.GetRunPhotoAsync(runId, index);
-            if (bytes is null) return Results.NotFound();
+            var attachment = await runRepo.GetRunPhotoAsync(runId, index);
+            if (attachment is null) return Results.NotFound();
             
             context.Response.Headers.CacheControl = "private, no-store";
-            return Results.Bytes(bytes, "image/jpeg", enableRangeProcessing: true);
+            return Results.Bytes(attachment.Data, attachment.ContentType, enableRangeProcessing: true);
         })
         .WithTags("Admin: Inventory")
         .WithSummary("Фотография отчёта инвентаризации");
@@ -183,11 +179,11 @@ public static class AdminInventoryEndpoints
         endpoints.MapGet("/api/admin/inventory/runs/{runId:long}/media/{kind}", async (long runId, string kind, HttpContext context, InventoryRunRepository runRepo) =>
         {
             if (kind != "photo" && kind != "voice") return Results.NotFound();
-            var bytes = await runRepo.GetRunMediaAsync(runId, kind);
-            if (bytes is null) return Results.NotFound();
+            var attachment = await runRepo.GetRunMediaAsync(runId, kind);
+            if (attachment is null) return Results.NotFound();
             
             context.Response.Headers.CacheControl = "private, no-store";
-            return Results.Bytes(bytes, kind == "photo" ? "image/jpeg" : "audio/wav", enableRangeProcessing: true);
+            return Results.Bytes(attachment.Data, attachment.ContentType, enableRangeProcessing: true);
         })
         .WithTags("Admin: Inventory")
         .WithSummary("Получить фото или голосовое сообщение инвентаризации")

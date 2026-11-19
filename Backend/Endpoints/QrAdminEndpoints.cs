@@ -55,28 +55,23 @@ public static class QrAdminEndpoints
         .WithSummary("Обновление QR-кода")
         .Produces(200).Produces(400).Produces(404).Produces(409);
 
-        endpoints.MapDelete("/api/admin/qr/{id:long}", async (long id, QrRepository qrRepo, QrDeletionRepository qrDeletion) =>
+        endpoints.MapDelete("/api/admin/qr/{id:long}", async (long id, QrDeletionRepository qrDeletion) =>
         {
-            if (!await qrRepo.ExistsByIdAsync(id))
-                return Results.NotFound(new { success = false, message = "QR-код не найден" });
-
-            var deletion = await qrDeletion.DeleteQrDependenciesAsync(id, requireCabinet: false);
-            var deleted = await qrRepo.DeleteByIdAsync(id);
-
-            if (!deleted)
+            var deletion = await qrDeletion.DeleteQrAndDependenciesAsync(id, requireCabinet: false);
+            if (!deletion.QrFound)
                 return Results.NotFound(new { success = false, message = "QR-код не найден" });
 
             return Results.Ok(new
             {
                 success = true,
-                message = deletion?.CabinetId is not null
+                message = deletion.CabinetFound
                     ? "Шкаф, QR-код и история инвентаризаций удалены"
                     : "QR-код удалён; события журнала сохранены без связи с ним",
-                deletedRunItems = deletion?.DeletedRunItems ?? 0,
-                deletedRuns = deletion?.DeletedRuns ?? 0,
-                deletedChecklistItems = deletion?.DeletedChecklistItems ?? 0,
-                deletedPhotos = deletion?.DeletedPhotos ?? 0,
-                deletedEvents = deletion?.DeletedEvents ?? 0
+                deletion.DeletedRunItems,
+                deletion.DeletedRuns,
+                deletion.DeletedChecklistItems,
+                deletion.DeletedPhotos,
+                deletion.DeletedEvents
             });
         })
         .WithTags("Admin: QR")

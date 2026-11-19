@@ -7,12 +7,14 @@ using NpgsqlTypes;
 
 namespace Backend.Data;
 
+/// <summary>Вложение отчёта вместе с MIME-типом, сохранённым в базе.</summary>
+public sealed record InventoryRunAttachment(byte[] Data, string ContentType);
+
 /// <summary>
 /// Слой доступа к таблицам инвентаризаций:
 /// - inventory_runs (записи о проверках)
 /// - inventory_run_items (отметки по чек-листу)
-/// - inventory_run_media (фото и голос)
-/// - inventory_run_photos (дополнительные фото)
+/// - inventory_run_attachments (фотографии и необязательная голосовая запись)
 /// 
 /// Содержит как методы чтения (для админки), так и транзакционные методы записи
 /// (принимают готовое соединение и транзакцию), которые использует InventorySyncService.
@@ -77,12 +79,20 @@ public class InventoryRunRepository
         
         // 1. Основная информация
         long id; Guid clientRunId; DateTime startedAt, completedAt; long userId;
-        string userFullName, userDepartment, cabinetTitle, qrCode; bool hasMedia; int photoCount;
+        string userFullName, userDepartment, cabinetTitle, qrCode;
+        bool hasPhotos, hasVoice;
 
         await using var mainCmd = new NpgsqlCommand(@"
             SELECT r.id, r.client_run_id, r.started_at, r.completed_at,
                    r.user_id, u.full_name, u.department, c.title, q.code,
-                   EXISTS (SELECT 1 FROM inventory_run_media m WHERE m.inventory_run_id = r.id)
+                   EXISTS (
+                       SELECT 1 FROM inventory_run_attachments a
+                       WHERE a.inventory_run_id = r.id AND a.attachment_type = 'photo'
+                   ),
+                   EXISTS (
+                       SELECT 1 FROM inventory_run_attachments a
+                       WHERE a.inventory_run_id = r.id AND a.attachment_type = 'voice'
+                   )
             FROM inventory_runs r
             JOIN users u ON u.id = r.user_id
             JOIN cabinet_profiles c ON c.id = r.cabinet_id
@@ -97,15 +107,24 @@ public class InventoryRunRepository
         startedAt = reader.GetDateTime(2); completedAt = reader.GetDateTime(3);
         userId = reader.GetInt64(4); userFullName = reader.GetString(5);
         userDepartment = reader.GetString(6); cabinetTitle = reader.GetString(7);
-        qrCode = reader.GetString(8); hasMedia = reader.GetBoolean(9);
+        qrCode = reader.GetString(8);
+        hasPhotos = reader.GetBoolean(9);
+        hasVoice = reader.GetBoolean(10);
         await reader.CloseAsync();
 
-        // 2. Подсчет фото (основное + дополнительные)
-        await using var countCmd = new NpgsqlCommand(@"
-            SELECT CASE WHEN EXISTS (SELECT 1 FROM inventory_run_media WHERE inventory_run_id=@id) THEN 1 ELSE 0 END 
-                   + (SELECT COUNT(*) FROM inventory_run_photos WHERE inventory_run_id=@id)", conn);
-        countCmd.Parameters.AddWithValue("id", runId);
-        photoCount = Convert.ToInt32(await countCmd.ExecuteScalarAsync());
+        // 2. Читаем реальные индексы фото: они могут отсутствовать или идти не подряд.
+        var photoIndices = new List<int>();
+        await using (var photoIndexCmd = new NpgsqlCommand(@"
+            SELECT attachment_index
+            FROM inventory_run_attachments
+            WHERE inventory_run_id = @id AND attachment_type = 'photo'
+            ORDER BY attachment_index", conn))
+        {
+            photoIndexCmd.Parameters.AddWithValue("id", runId);
+            await using var photoIndexReader = await photoIndexCmd.ExecuteReaderAsync();
+            while (await photoIndexReader.ReadAsync())
+                photoIndices.Add(photoIndexReader.GetInt16(0));
+        }
 
         // 3. Предметы чек-листа
         var items = new List<object>();
@@ -129,9 +148,9 @@ public class InventoryRunRepository
         return new {
             id, clientRunId, startedAt, completedAt, userId, userFullName,
             userDepartment, cabinetTitle, qrCode, items,
-            photoUrl = hasMedia ? $"/api/admin/inventory/runs/{id}/media/photo" : null,
-            photoUrls = Enumerable.Range(0, photoCount).Select(index => $"/api/admin/inventory/runs/{id}/media/photo/{index}").ToArray(),
-            voiceUrl = hasMedia ? $"/api/admin/inventory/runs/{id}/media/voice" : null
+            photoUrl = hasPhotos ? $"/api/admin/inventory/runs/{id}/media/photo" : null,
+            photoUrls = photoIndices.Select(index => $"/api/admin/inventory/runs/{id}/media/photo/{index}").ToArray(),
+            voiceUrl = hasVoice ? $"/api/admin/inventory/runs/{id}/media/voice" : null
         };
     }
 
@@ -139,32 +158,46 @@ public class InventoryRunRepository
     /// Получение байт фотографии отчета (GET .../media/photo/{index}).
     /// index=0 — основное фото, index>0 — дополнительные.
     /// </summary>
-    public async Task<byte[]?> GetRunPhotoAsync(long runId, int index)
+    public async Task<InventoryRunAttachment?> GetRunPhotoAsync(long runId, int index)
     {
         await using var conn = await _dataSource.OpenConnectionAsync();
-        await using var cmd = index == 0
-            ? new NpgsqlCommand("SELECT photo_jpeg FROM inventory_run_media WHERE inventory_run_id=@id", conn)
-            : new NpgsqlCommand("SELECT photo_jpeg FROM inventory_run_photos WHERE inventory_run_id=@id AND photo_index=@index", conn);
-        
+        await using var cmd = new NpgsqlCommand(@"
+            SELECT data, content_type
+            FROM inventory_run_attachments
+            WHERE inventory_run_id = @id
+              AND attachment_type = 'photo'
+              AND attachment_index = @index", conn);
         cmd.Parameters.AddWithValue("id", runId);
-        if (index > 0) cmd.Parameters.AddWithValue("index", index);
-        
-        return await cmd.ExecuteScalarAsync() as byte[];
+        cmd.Parameters.AddWithValue("index", index);
+
+        await using var reader = await cmd.ExecuteReaderAsync();
+        return await reader.ReadAsync()
+            ? new InventoryRunAttachment(reader.GetFieldValue<byte[]>(0), reader.GetString(1))
+            : null;
     }
 
     /// <summary>
     /// Получение байт медиа (фото или голос) по типу (GET .../media/{kind}).
     /// </summary>
-    public async Task<byte[]?> GetRunMediaAsync(long runId, string kind)
+    public async Task<InventoryRunAttachment?> GetRunMediaAsync(long runId, string kind)
     {
         await using var conn = await _dataSource.OpenConnectionAsync();
-        var sql = kind == "photo" 
-            ? "SELECT photo_jpeg FROM inventory_run_media WHERE inventory_run_id = @runId"
-            : "SELECT voice_wav FROM inventory_run_media WHERE inventory_run_id = @runId";
-        
-        await using var cmd = new NpgsqlCommand(sql, conn);
+        if (kind is not ("photo" or "voice"))
+            return null;
+
+        await using var cmd = new NpgsqlCommand(@"
+            SELECT data, content_type
+            FROM inventory_run_attachments
+            WHERE inventory_run_id = @runId
+              AND attachment_type = @kind
+              AND attachment_index = 0", conn);
         cmd.Parameters.AddWithValue("runId", runId);
-        return await cmd.ExecuteScalarAsync() as byte[];
+        cmd.Parameters.AddWithValue("kind", kind);
+
+        await using var reader = await cmd.ExecuteReaderAsync();
+        return await reader.ReadAsync()
+            ? new InventoryRunAttachment(reader.GetFieldValue<byte[]>(0), reader.GetString(1))
+            : null;
     }
 
     // ==========================================
@@ -199,27 +232,24 @@ public class InventoryRunRepository
         return result is long id ? id : -1; // -1 означает дубликат (DO NOTHING)
     }
 
-    public async Task InsertRunMediaAsync(NpgsqlConnection conn, NpgsqlTransaction tran, long runId, byte[] photo, byte[] voice)
+    public async Task InsertRunAttachmentAsync(
+        NpgsqlConnection conn,
+        NpgsqlTransaction tran,
+        long runId,
+        string attachmentType,
+        int attachmentIndex,
+        string contentType,
+        byte[] data)
     {
         await using var cmd = new NpgsqlCommand(@"
-            INSERT INTO inventory_run_media (inventory_run_id, photo_jpeg, voice_wav)
-            VALUES (@runId, @photo, @voice)", conn, tran);
-        
+            INSERT INTO inventory_run_attachments
+                (inventory_run_id, attachment_type, attachment_index, content_type, data)
+            VALUES (@runId, @type, @index, @contentType, @data)", conn, tran);
         cmd.Parameters.AddWithValue("runId", runId);
-        cmd.Parameters.AddWithValue("photo", NpgsqlDbType.Bytea, photo);
-        cmd.Parameters.AddWithValue("voice", NpgsqlDbType.Bytea, voice);
-        await cmd.ExecuteNonQueryAsync();
-    }
-
-    public async Task InsertRunPhotoAsync(NpgsqlConnection conn, NpgsqlTransaction tran, long runId, int photoIndex, byte[] photo)
-    {
-        await using var cmd = new NpgsqlCommand(@"
-            INSERT INTO inventory_run_photos (inventory_run_id, photo_index, photo_jpeg)
-            VALUES (@runId, @photoIndex, @photo)", conn, tran);
-        
-        cmd.Parameters.AddWithValue("runId", runId);
-        cmd.Parameters.AddWithValue("photoIndex", photoIndex);
-        cmd.Parameters.AddWithValue("photo", NpgsqlDbType.Bytea, photo);
+        cmd.Parameters.AddWithValue("type", attachmentType);
+        cmd.Parameters.AddWithValue("index", attachmentIndex);
+        cmd.Parameters.AddWithValue("contentType", contentType);
+        cmd.Parameters.AddWithValue("data", NpgsqlDbType.Bytea, data);
         await cmd.ExecuteNonQueryAsync();
     }
 
