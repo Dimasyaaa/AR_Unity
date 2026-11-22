@@ -8,8 +8,8 @@ using UnityEngine;
 using UnityEngine.UI;
 
 /// <summary>
-/// Управляет проверкой содержимого выбранного шкафа и отправкой её результата.
-/// Постоянная разметка настраивается в префабе; строки списка создаются по данным шкафа.
+/// Управляет проверкой содержимого выбранной коробки и отправкой её результата.
+/// Постоянная разметка настраивается в префабе; строки списка создаются по данным коробки.
 /// </summary>
 public sealed class InventoryChecklistController : MonoBehaviour
 {
@@ -18,7 +18,7 @@ public sealed class InventoryChecklistController : MonoBehaviour
 
     public IReadOnlyList<string> VoiceItemNames => itemNames.Values.ToList();
     public bool CanFinalize => !saving && !completed && statuses.Count > 0 &&
-        statuses.Values.All(value => value == "present" || value == "missing");
+        statuses.Values.All(value => value == "present" || value == "partial" || value == "missing");
 
     [Header("Интерфейс карточки")]
     [SerializeField] private TextMeshProUGUI message;
@@ -27,23 +27,25 @@ public sealed class InventoryChecklistController : MonoBehaviour
     [SerializeField] private Button finishButton;
     [SerializeField] private ScrollRect checklistScroll;
 
-    private LocalCabinetProfile localCabinet;
-    private InventoryCabinetResponse serverCabinet;
+    private LocalCabinetProfile localBox;
+    private InventoryBoxResponse serverBox;
     private string qrCode;
     private DateTime startedAtUtc;
     private readonly Dictionary<long, string> statuses = new();
     private readonly Dictionary<long, string> itemNames = new();
+    private readonly Dictionary<long, int> expectedQuantities = new();
+    private readonly Dictionary<long, int> actualQuantities = new();
     private readonly Dictionary<long, InventoryChecklistItemRow> itemRows = new();
     private bool saving;
     private bool completed;
 
-    // При появлении карточки берём последний отсканированный QR и загружаем состав шкафа.
+    // При появлении карточки берём последний отсканированный QR и загружаем состав коробки.
     private void Start()
     {
         Active = this;
         qrCode = GameDataManager.LastScannedQR;
         startedAtUtc = DateTime.UtcNow;
-        localCabinet = LocalDatabase.Instance != null
+        localBox = LocalDatabase.Instance != null
             ? LocalDatabase.Instance.FindCabinetByQr(qrCode)
             : null;
 
@@ -55,12 +57,12 @@ public sealed class InventoryChecklistController : MonoBehaviour
 
         if (!string.IsNullOrWhiteSpace(qrCode))
         {
-            SetMessage("Загружаем список предметов шкафа…");
-            InventoryApiClient.GetCabinet(this, qrCode, OnCabinetReceived, OnApiLoadFailed);
+            SetMessage("Загружаем список предметов коробки…");
+            InventoryApiClient.GetBox(this, qrCode, OnBoxReceived, OnApiLoadFailed);
         }
         else
         {
-            OnApiLoadFailed("Сначала отсканируйте QR-код шкафа.");
+            OnApiLoadFailed("Сначала отсканируйте QR-код коробки.");
         }
     }
 
@@ -91,31 +93,33 @@ public sealed class InventoryChecklistController : MonoBehaviour
             Mathf.Clamp01(checklistScroll.verticalNormalizedPosition + amount);
     }
 
-    // Сервер присылает состав шкафа; на его основе создаём строки из шаблона префаба.
-    private void OnCabinetReceived(InventoryCabinetResponse response)
+    // Сервер присылает состав коробки; на его основе создаём строки из шаблона префаба.
+    private void OnBoxReceived(InventoryBoxResponse response)
     {
-        serverCabinet = response;
-        var items = response.items ?? Array.Empty<InventoryCabinetItem>();
+        serverBox = response;
+        var items = response.items ?? Array.Empty<InventoryBoxItem>();
         ClearRows();
 
         foreach (var item in items)
         {
             statuses[item.id] = string.Empty;
             itemNames[item.id] = item.name;
-            AddItem(item.id, item.name);
+            expectedQuantities[item.id] = Mathf.Max(1, item.expectedQuantity);
+            actualQuantities[item.id] = 0;
+            AddItem(item.id, item.name, expectedQuantities[item.id]);
         }
 
         if (items.Length == 0)
-            SetMessage("В админ-панели добавьте предметы в чек-лист этого шкафа.");
+            SetMessage("В админ-панели добавьте позиции в перечень этой коробки.");
         else
-            SetMessage($"Шкаф: {response.title} · предметов: {items.Length}");
+        SetMessage($"Коробка: {response.title} · позиций: {items.Length}");
     }
 
     // Если сеть недоступна, пытаемся продолжить с локальной копией чек-листа.
     private void OnApiLoadFailed(string error)
     {
-        var fallbackItems = localCabinet != null && LocalDatabase.Instance != null
-            ? LocalDatabase.Instance.GetCabinetChecklist(localCabinet.id)
+        var fallbackItems = localBox != null && LocalDatabase.Instance != null
+            ? LocalDatabase.Instance.GetCabinetChecklist(localBox.id)
             : new List<LocalCabinetChecklistItem>();
 
         if (fallbackItems.Count == 0)
@@ -130,10 +134,12 @@ public sealed class InventoryChecklistController : MonoBehaviour
         {
             statuses[item.id] = string.Empty;
             itemNames[item.id] = item.item_name;
-            AddItem(item.id, item.item_name);
+            expectedQuantities[item.id] = Mathf.Max(1, item.expected_quantity);
+            actualQuantities[item.id] = 0;
+            AddItem(item.id, item.item_name, expectedQuantities[item.id]);
         }
 
-        SetMessage("Офлайн-режим · данные из локальной базы");
+        SetMessage("Офлайн-режим · данные коробки из локальной базы");
     }
 
     // Удаляем только созданные строки, оставляя шаблон и ScrollRect в префабе.
@@ -141,6 +147,8 @@ public sealed class InventoryChecklistController : MonoBehaviour
     {
         statuses.Clear();
         itemNames.Clear();
+        expectedQuantities.Clear();
+        actualQuantities.Clear();
         itemRows.Clear();
 
         if (content == null || itemRowTemplate == null)
@@ -157,12 +165,12 @@ public sealed class InventoryChecklistController : MonoBehaviour
     }
 
     // Каждая строка получает собственный ID и возвращает выбранный ответ контроллеру.
-    private void AddItem(long id, string name)
+    private void AddItem(long id, string name, int expectedQuantity)
     {
         InventoryChecklistItemRow row = Instantiate(itemRowTemplate, content, false);
         row.name = "Item_" + id;
         row.gameObject.SetActive(true);
-        row.Configure(id, name, SetStatus);
+        row.Configure(id, name, expectedQuantity, SetStatus, SetActualQuantity);
         itemRows[id] = row;
     }
 
@@ -218,9 +226,26 @@ public sealed class InventoryChecklistController : MonoBehaviour
         if (completed || saving || !statuses.ContainsKey(id))
             return;
 
+        actualQuantities[id] = value == "present" ? expectedQuantities[id] : 0;
         statuses[id] = value;
         if (itemRows.TryGetValue(id, out InventoryChecklistItemRow row))
-            row.ShowStatus(value);
+            row.ShowStatus(value, actualQuantities[id], expectedQuantities[id]);
+    }
+
+    // Количество уточняет отметку наличия: любое значение выше нуля означает «Есть».
+    private void SetActualQuantity(long id, int quantity)
+    {
+        if (completed || saving || !statuses.ContainsKey(id))
+            return;
+
+        int actual = Mathf.Clamp(quantity, 0, 100000);
+        actualQuantities[id] = actual;
+        int expected = expectedQuantities[id];
+        string status = actual == 0 ? "missing" : "present";
+        statuses[id] = status;
+
+        if (itemRows.TryGetValue(id, out InventoryChecklistItemRow row))
+            row.ShowStatus(status, actual, expected);
     }
 
     private void OpenReport()
@@ -230,7 +255,7 @@ public sealed class InventoryChecklistController : MonoBehaviour
 
         if (!CanFinalize)
         {
-            SetMessage("Отметьте каждый предмет: «Есть» или «Нет».");
+            SetMessage("Для каждой позиции нажмите «Есть» или «Нет» и при необходимости укажите количество.");
             return;
         }
 
@@ -239,12 +264,12 @@ public sealed class InventoryChecklistController : MonoBehaviour
 
     // Сначала сохраняем результат локально, затем отправляем его; при ошибке API
     // отчёт остаётся в очереди и может уйти при следующей синхронизации.
-    public void SubmitReport(List<byte[]> photos, byte[] voice, Action<bool, string> onDone,
+    public void SubmitReport(List<byte[]> photos, string reportNote, Action<bool, string> onDone,
         Action<string> onProgress)
     {
-        if (!CanFinalize || photos == null || photos.Count == 0 || voice == null)
+        if (!CanFinalize || photos == null || photos.Count == 0)
         {
-            onDone(false, "Отметьте каждый предмет и добавьте фото и голосовое сообщение.");
+            onDone(false, "Отметьте каждый предмет и добавьте хотя бы одно фото.");
             return;
         }
 
@@ -254,29 +279,33 @@ public sealed class InventoryChecklistController : MonoBehaviour
             return;
         }
 
-        if (serverCabinet == null && localCabinet == null)
+        if (serverBox == null && localBox == null)
         {
-            onDone(false, "Не удалось определить шкаф для отчёта. Загрузите его данные и повторите.");
+            onDone(false, "Не удалось определить коробку для отчёта. Загрузите её данные и повторите.");
             return;
         }
 
         string runId = Guid.NewGuid().ToString("D");
+        LocalInventoryBatch batch = LocalDatabase.Instance?.GetActiveInventoryBatch(SessionManager.UserId);
         var payload = new InventoryRunSyncDto
         {
             clientRunId = runId,
+            clientBatchId = batch?.client_batch_id,
+            expectedBoxCount = batch?.expected_box_count ?? 0,
             userId = SessionManager.UserId,
-            qrCode = serverCabinet?.qrCode ?? qrCode,
+            qrCode = serverBox?.qrCode ?? qrCode,
             startedAt = startedAtUtc.ToUniversalTime().ToString("o"),
             completedAt = DateTime.UtcNow.ToString("o"),
             items = statuses.Select(pair => new InventoryRunItemSyncDto
             {
                 itemId = pair.Key,
                 status = pair.Value,
+                actualQuantity = actualQuantities[pair.Key],
                 comment = ""
             }).ToList(),
             photoBase64 = Convert.ToBase64String(photos[0]),
             photosBase64 = photos.ConvertAll(Convert.ToBase64String).ToArray(),
-            voiceBase64 = Convert.ToBase64String(voice)
+            reportNote = string.IsNullOrWhiteSpace(reportNote) ? null : reportNote.Trim()
         };
 
         try
@@ -285,10 +314,10 @@ public sealed class InventoryChecklistController : MonoBehaviour
             if (database == null || !database.IsReady)
                 throw new InvalidOperationException("Локальная база ещё не готова.");
 
-            long cabinetId = serverCabinet?.cabinetId ?? localCabinet.id;
-            long qrCodeId = serverCabinet?.qrCodeId ?? localCabinet.qr_code_id;
-            string cabinetTitle = serverCabinet?.title ?? localCabinet.title ?? qrCode;
-            database.SaveInventoryRun(payload, cabinetId, qrCodeId, cabinetTitle, itemNames);
+            long cabinetId = serverBox?.boxId ?? localBox.id;
+            long qrCodeId = serverBox?.qrCodeId ?? localBox.qr_code_id;
+            string boxTitle = serverBox?.title ?? localBox.title ?? qrCode;
+            database.SaveInventoryRun(payload, cabinetId, qrCodeId, boxTitle, itemNames);
         }
         catch (Exception error)
         {
@@ -301,7 +330,9 @@ public sealed class InventoryChecklistController : MonoBehaviour
         saving = true;
         finishButton.interactable = false;
         SetMessage("Отправляем отчёт на сервер…");
-        onProgress("Отправляем отчёт с фото и голосовым сообщением…");
+        onProgress(string.IsNullOrWhiteSpace(reportNote)
+            ? "Отправляем отчёт с фотографиями…"
+            : "Отправляем отчёт с фотографиями и текстовой заметкой…");
 
         InventoryApiClient.SubmitInventory(this, payload,
             result =>
@@ -316,7 +347,9 @@ public sealed class InventoryChecklistController : MonoBehaviour
                     Debug.LogWarning("[Отчёт инвентаризации] " + error.Message);
                 }
 
-                const string messageText = "Отчёт с фото и голосовым сообщением доступен администратору.";
+                string messageText = string.IsNullOrWhiteSpace(reportNote)
+                    ? "Отчёт с фотографиями доступен администратору."
+                    : "Отчёт с фотографиями и заметкой доступен администратору.";
                 SetMessage(messageText);
                 onDone(true, messageText);
             },

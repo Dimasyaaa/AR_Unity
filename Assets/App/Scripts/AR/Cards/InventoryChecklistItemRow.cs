@@ -10,6 +10,7 @@ using UnityEngine.UI;
 public sealed class InventoryChecklistItemRow : MonoBehaviour
 {
     [SerializeField] private TextMeshProUGUI itemName;
+    [SerializeField] private TMP_InputField actualQuantityInput;
     [SerializeField] private Button presentButton;
     [SerializeField] private Button missingButton;
     [SerializeField] private Image presentBackground;
@@ -18,15 +19,29 @@ public sealed class InventoryChecklistItemRow : MonoBehaviour
     // ID хранится у строки, чтобы нажатие изменило именно нужный предмет шкафа.
     private long itemId;
     private Action<long, string> statusChanged;
+    private Action<long, int> quantityChanged;
 
     /// <summary>Заполняет строку данными и связывает её кнопки с выбранным предметом.</summary>
-    public void Configure(long id, string name, Action<long, string> onStatusChanged)
+    public void Configure(long id, string name, int expectedQuantity,
+        Action<long, string> onStatusChanged, Action<long, int> onQuantityChanged)
     {
         itemId = id;
         statusChanged = onStatusChanged;
+        quantityChanged = onQuantityChanged;
 
         if (itemName != null)
-            itemName.text = name;
+            itemName.text = $"{name} · учёт: {expectedQuantity}";
+
+        if (actualQuantityInput != null)
+        {
+            actualQuantityInput.contentType = TMP_InputField.ContentType.IntegerNumber;
+            actualQuantityInput.onEndEdit.RemoveAllListeners();
+            actualQuantityInput.onEndEdit.AddListener(value =>
+            {
+                if (int.TryParse(value, out int quantity))
+                    quantityChanged?.Invoke(itemId, Mathf.Clamp(quantity, 0, 100000));
+            });
+        }
 
         if (presentButton != null)
         {
@@ -40,12 +55,16 @@ public sealed class InventoryChecklistItemRow : MonoBehaviour
             missingButton.onClick.AddListener(() => statusChanged?.Invoke(itemId, "missing"));
         }
 
-        ShowStatus(string.Empty);
+        ShowStatus(string.Empty, 0, expectedQuantity);
     }
 
     /// <summary>Подсвечивает выбранный ответ, оставляя обе кнопки видимыми.</summary>
-    public void ShowStatus(string status)
+    public void ShowStatus(string status, int actualQuantity, int expectedQuantity)
     {
+        if (actualQuantityInput != null)
+            actualQuantityInput.SetTextWithoutNotify(
+                string.IsNullOrEmpty(status) ? string.Empty : actualQuantity.ToString());
+
         if (presentBackground != null)
             presentBackground.color = status == "present"
                 ? new Color(.12f, .85f, .32f)

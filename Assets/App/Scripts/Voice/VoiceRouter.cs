@@ -91,8 +91,8 @@ public sealed class VoiceRouter : MonoBehaviour
         if (InventoryReportCapture.Active is { } report && report != null)
         {
             if (Has(normalized, "сделать фото", "сделай фото", "снимок")) report.TakePhoto();
-            else if (Has(normalized, "записать голос", "запиши голос", "перезаписать")) report.RecordOrStop();
-            else if (Has(normalized, "прослушать")) report.PlayVoice();
+            else if (Has(normalized, "надиктовать", "надиктуй заметку", "записать заметку", "запиши заметку")) report.StartDictation();
+            else if (Has(normalized, "очистить заметку", "удалить заметку")) report.ClearNote();
             else if (Has(normalized, "отправить отчёт", "отправить отчет", "отправь отчет", "отправь отчёт")) report.Send();
             else if (Has(normalized, "назад", "закрыть камеру", "отмена")) report.Close();
             return;
@@ -107,9 +107,16 @@ public sealed class VoiceRouter : MonoBehaviour
         string action = null;
         bool containsDictatedText = IsTextEntryPhrase(normalized);
 
-        if (VoiceHelpController.IsOpen && Has(normalized, "помощь", "справка", "команды", "подсказки", "закрой помощь", "закрой справку", "закрой подсказки", "закрыть помощь", "закрыть подсказки", "close help"))
+        bool closeHelpCommand = Has(normalized, "закрой помощь", "закрой справку", "закрой подсказки",
+            "закрыть помощь", "закрыть подсказки", "close help");
+        if (closeHelpCommand && (VoiceHelpController.IsOpen ||
+                                 (scene == "InventorySelectionScene" && InventorySelectionController.Instance != null &&
+                                  InventorySelectionController.Instance.IsVoiceHelpVisible)))
         {
-            VoiceHelpController.CloseIfOpen();
+            if (VoiceHelpController.IsOpen)
+                VoiceHelpController.CloseIfOpen();
+            else
+                InventorySelectionController.Instance.HideVoiceHelp();
             Report("Подсказки закрыты");
             return;
         }
@@ -120,6 +127,11 @@ public sealed class VoiceRouter : MonoBehaviour
             {
                 VoiceHelpController.Instance.Open();
                 Report("Открыты команды для текущего экрана");
+            }
+            else if (scene == "InventorySelectionScene" && InventorySelectionController.Instance != null)
+            {
+                InventorySelectionController.Instance.ShowVoiceHelp();
+                Report("Команды показаны в строке состояния");
             }
             else Report("В этой сцене не настроена кнопка помощи");
             return;
@@ -194,6 +206,12 @@ public sealed class VoiceRouter : MonoBehaviour
             return;
         }
 
+        if (scene == "InventorySelectionScene" && HandleInventorySelection(normalized, out action))
+        {
+            Report(action);
+            return;
+        }
+
         if (scene == "LoginScene" && HandleLogin(normalized, out action))
         {
             Report(action);
@@ -226,6 +244,8 @@ public sealed class VoiceRouter : MonoBehaviour
     // Команды главного меню.
     private static bool HandleStart(string phrase, out string action)
     {
+        if (Has(phrase, "начать инвентаризацию", "выбрать инвентаризацию", "назначение", "история инвентаризаций"))
+            return PressAny(new[] { "ScanButton", "Начать инвентаризацию", "Инвентаризация" }, out action);
         if (Has(phrase, "сканировать", "скан", "qr", "scan"))
             return PressAny(new[] { "ScanButton", "Сканировать QR" }, out action);
         if (Has(phrase, "инструкция", "как пользоваться", "instruction"))
@@ -238,6 +258,20 @@ public sealed class VoiceRouter : MonoBehaviour
             return PressAny(new[] { "UsbButton", "USB" }, out action);
         if (Has(phrase, "выход", "выйти", "завершить приложение", "exit"))
             return PressAny(new[] { "ExitButton", "Выход" }, out action);
+        action = null;
+        return false;
+    }
+
+    // Команды экрана назначения: начать проверку или вернуться в главное меню.
+    private static bool HandleInventorySelection(string phrase, out string action)
+    {
+        if (Has(phrase, "начать инвентаризацию", "начать проверку", "приступить",
+                "сканировать первую коробку", "продолжить инвентаризацию"))
+            return PressAny(new[] { "StartInventoryButton", "Начать инвентаризацию" }, out action);
+
+        if (Has(phrase, "вернуться в меню", "главное меню", "назад", "в меню"))
+            return PressAny(new[] { "BackToMenuButton", "Вернуться в меню", "Главное меню" }, out action);
+
         action = null;
         return false;
     }
@@ -294,9 +328,11 @@ public sealed class VoiceRouter : MonoBehaviour
 
         if (Has(phrase, "калькулятор", "calculator", "посчитать", "calc"))
             return SelectCardButton("Button (Calculator)", out action);
-        if (Has(phrase, "инвентаризация", "чек лист", "чеклист", "проверка шкафа"))
+        if (Has(phrase, "инвентаризация", "чек лист", "чеклист", "проверка коробки", "проверка шкафа"))
             return SelectCardButton("Button (Inventory)", out action);
-        if (Has(phrase, "вид шкафа", "фото шкафа", "лист шкафа", "шкаф"))
+        if (Has(phrase, "3d модель", "модели коробки", "трёхмерная модель", "объекты коробки"))
+            return SelectCardButton("Button (Box Models)", out action);
+        if (Has(phrase, "содержимое коробки", "вид коробки", "фото коробки", "коробка"))
             return SelectCardButton("Button (Cabinet)", out action);
 
         if (Has(phrase, "оверлей", "режим экрана", "overlay"))
@@ -305,7 +341,7 @@ public sealed class VoiceRouter : MonoBehaviour
             return PressAny(new[] { "объект", "Object" }, out action);
         if (Has(phrase, "карточка", "изображение"))
         {
-            action = "Назовите карточку: «калькулятор», «вид шкафа» или «инвентаризация».";
+            action = "Назовите карточку: «калькулятор», «содержимое коробки», «3D-модели» или «инвентаризация».";
             return true;
         }
 
@@ -533,7 +569,7 @@ public sealed class VoiceRouter : MonoBehaviour
         return true;
     }
 
-    // Переключает листы карточки шкафа или изображения.
+    // Переключает фотографии содержимого коробки.
     private bool TryHandleImagePage(string phrase, out string action)
     {
         action = null;
@@ -546,7 +582,7 @@ public sealed class VoiceRouter : MonoBehaviour
             .FirstOrDefault(item => item != null && item.gameObject.activeInHierarchy);
         if (card == null)
         {
-            action = "Сначала откройте карточку шкафа или изображения";
+            action = "Сначала откройте карточку с изображениями коробки";
             return true;
         }
 
@@ -554,7 +590,7 @@ public sealed class VoiceRouter : MonoBehaviour
         if (selected)
             action = next ? "Открыт лист 2" : "Открыт лист 1";
         else
-            action = next ? "Лист 2 не добавлен для этого шкафа" : "Лист 1 не добавлен для этого шкафа";
+            action = next ? "Вторая фотография коробки не добавлена" : "Первая фотография коробки не добавлена";
         return true;
     }
 
@@ -564,6 +600,7 @@ public sealed class VoiceRouter : MonoBehaviour
         action = null;
         bool isCloseCommand = Has(phrase, "закрыть карточку", "закрой карточку", "закрыть панель", "закрой панель",
             "закрой калькулятор", "закрыть калькулятор", "закрой инвентаризацию", "закрыть инвентаризацию",
+            "закрой коробку", "закрыть коробку", "закрой содержимое", "закрой модели", "закрыть модели",
             "закрой шкаф", "закрыть шкаф", "закрой фото", "закрыть фото",
             "close card", "close panel");
         if (!isCloseCommand)
@@ -571,8 +608,9 @@ public sealed class VoiceRouter : MonoBehaviour
 
         bool targetCalculator = Has(phrase, "калькулятор", "calc");
         bool targetInventory = Has(phrase, "инвентаризац", "чек лист", "чеклист");
-        bool targetCabinet = Has(phrase, "шкаф", "фото");
-        bool hasTarget = targetCalculator || targetInventory || targetCabinet;
+        bool targetBox = Has(phrase, "короб", "шкаф", "фото", "содержимое");
+        bool targetModels = Has(phrase, "модел", "3d", "трёхмер");
+        bool hasTarget = targetCalculator || targetInventory || targetBox || targetModels;
 
         var candidates = new List<GameObject>();
         foreach (CalculatorController card in FindObjectsByType<CalculatorController>(FindObjectsInactive.Include))
@@ -580,7 +618,9 @@ public sealed class VoiceRouter : MonoBehaviour
         foreach (InventoryChecklistController card in FindObjectsByType<InventoryChecklistController>(FindObjectsInactive.Include))
             if (card != null && card.gameObject.activeInHierarchy && (!hasTarget || targetInventory)) candidates.Add(card.gameObject);
         foreach (ImageCardController card in FindObjectsByType<ImageCardController>(FindObjectsInactive.Include))
-            if (card != null && card.gameObject.activeInHierarchy && (!hasTarget || targetCabinet)) candidates.Add(card.gameObject);
+            if (card != null && card.gameObject.activeInHierarchy && (!hasTarget || targetBox)) candidates.Add(card.gameObject);
+        foreach (BoxModelsCardController card in FindObjectsByType<BoxModelsCardController>(FindObjectsInactive.Include))
+            if (card != null && card.gameObject.activeInHierarchy && (!hasTarget || targetModels)) candidates.Add(card.gameObject);
         GameObject cardToClose = candidates.LastOrDefault();
         if (cardToClose == null)
         {
@@ -597,15 +637,22 @@ public sealed class VoiceRouter : MonoBehaviour
     private bool TryHandleScroll(string phrase, out string action)
     {
         action = null;
-        bool down = Has(phrase, "прокрути вниз", "листай вниз", "список вниз", "scroll down");
-        bool up = Has(phrase, "прокрути вверх", "листай вверх", "список вверх", "scroll up");
+        bool down = Has(phrase, "прокрути вниз", "листай вниз", "список вниз", "назначение вниз", "история вниз", "scroll down");
+        bool up = Has(phrase, "прокрути вверх", "листай вверх", "список вверх", "назначение вверх", "история вверх", "scroll up");
         if (!down && !up)
             return false;
 
-        ScrollRect scroll = FindObjectsByType<ScrollRect>(FindObjectsInactive.Include)
+        ScrollRect[] scrolls = FindObjectsByType<ScrollRect>(FindObjectsInactive.Include)
             .Where(item => item != null && item.isActiveAndEnabled && item.gameObject.activeInHierarchy)
             .OrderByDescending(item => item.viewport != null && item.viewport.gameObject.activeInHierarchy)
-            .FirstOrDefault();
+            .ToArray();
+        string scene = SceneManager.GetActiveScene().name;
+        bool historyRequested = Has(phrase, "история");
+        bool assignmentRequested = Has(phrase, "назначение", "коробки", "список");
+        ScrollRect scroll = scene == "InventorySelectionScene" && (historyRequested || assignmentRequested)
+            ? scrolls.FirstOrDefault(item => item.gameObject.name.Contains(historyRequested ? "History" : "Assignment"))
+            : null;
+        scroll ??= scrolls.FirstOrDefault();
         if (scroll == null)
         {
             action = "На экране нет прокручиваемого списка";
@@ -903,15 +950,18 @@ public sealed class VoiceRouter : MonoBehaviour
     {
         var cards = new HashSet<Transform>();
         bool targetCalculator = Has(phrase, "калькулятор", "calculator");
-        bool targetInventory = Has(phrase, "инвентаризац", "чек лист", "чеклист", "проверка шкафа");
-        bool targetCabinet = Has(phrase, "шкаф", "фото", "лист");
-        bool hasTarget = targetCalculator || targetInventory || targetCabinet;
+        bool targetInventory = Has(phrase, "инвентаризац", "чек лист", "чеклист", "проверка коробки", "проверка шкафа");
+        bool targetBox = Has(phrase, "короб", "фото", "содержимое", "вид");
+        bool targetModels = Has(phrase, "модел", "3d", "трёхмер");
+        bool hasTarget = targetCalculator || targetInventory || targetBox || targetModels;
         foreach (CalculatorController card in FindObjectsByType<CalculatorController>(FindObjectsInactive.Include))
             if (card != null && card.gameObject.activeInHierarchy && (!hasTarget || targetCalculator)) cards.Add(card.transform);
         foreach (ImageCardController card in FindObjectsByType<ImageCardController>(FindObjectsInactive.Include))
-            if (card != null && card.gameObject.activeInHierarchy && (!hasTarget || targetCabinet || targetInventory)) cards.Add(card.transform);
+            if (card != null && card.gameObject.activeInHierarchy && (!hasTarget || targetBox)) cards.Add(card.transform);
         foreach (InventoryChecklistController card in FindObjectsByType<InventoryChecklistController>(FindObjectsInactive.Include))
             if (card != null && card.gameObject.activeInHierarchy && (!hasTarget || targetInventory)) cards.Add(card.transform);
+        foreach (BoxModelsCardController card in FindObjectsByType<BoxModelsCardController>(FindObjectsInactive.Include))
+            if (card != null && card.gameObject.activeInHierarchy && (!hasTarget || targetModels)) cards.Add(card.transform);
         return cards.ToList();
     }
 
@@ -920,7 +970,8 @@ public sealed class VoiceRouter : MonoBehaviour
     {
         if (Has(phrase, "калькулятор", "calculator")) return "Калькулятор";
         if (Has(phrase, "инвентаризац", "чек лист", "чеклист")) return "Инвентаризация";
-        if (Has(phrase, "шкаф", "фото", "лист")) return "Шкаф";
+        if (Has(phrase, "короб", "фото", "содержимое", "вид")) return "Содержимое коробки";
+        if (Has(phrase, "модел", "3d", "трёхмер")) return "3D-модели";
         return "все открытые AR";
     }
 
@@ -932,6 +983,8 @@ public sealed class VoiceRouter : MonoBehaviour
         foreach (ImageCardController card in FindObjectsByType<ImageCardController>(FindObjectsInactive.Include))
             if (card != null) ARCardModeSelector.CloseCard(card.gameObject);
         foreach (InventoryChecklistController card in FindObjectsByType<InventoryChecklistController>(FindObjectsInactive.Include))
+            if (card != null) ARCardModeSelector.CloseCard(card.gameObject);
+        foreach (BoxModelsCardController card in FindObjectsByType<BoxModelsCardController>(FindObjectsInactive.Include))
             if (card != null) ARCardModeSelector.CloseCard(card.gameObject);
     }
 

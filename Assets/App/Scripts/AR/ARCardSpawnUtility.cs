@@ -128,6 +128,8 @@ public static class ARCardSpawnUtility
             return Object.FindAnyObjectByType<ImageCardController>(FindObjectsInactive.Include);
         if (prefab.GetComponentInChildren<InventoryChecklistController>(true) != null)
             return Object.FindAnyObjectByType<InventoryChecklistController>(FindObjectsInactive.Include);
+        if (prefab.GetComponentInChildren<BoxModelsCardController>(true) != null)
+            return Object.FindAnyObjectByType<BoxModelsCardController>(FindObjectsInactive.Include);
         return null;
     }
 

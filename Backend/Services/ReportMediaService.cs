@@ -7,7 +7,7 @@ namespace Backend.Services;
 
 /// <summary>
 /// Чистая бизнес-логика по работе с медиа-вложениями отчётов инвентаризации.
-/// Перенесена из InventoryApi.cs (методы ReadReportMedia и DecodeAttachment).
+/// Проверяет и декодирует фотографии и необязательную запись отчёта.
 /// Никакого SQL здесь нет — только декодирование base64 и валидация форматов JPEG/WAV.
 /// Все константы (лимиты размеров, сигнатуры файлов) сохранены 1-в-1 из оригинала.
 /// </summary>
@@ -36,10 +36,6 @@ public static class ReportMediaService
             : string.IsNullOrEmpty(singlePhotoBase64)
                 ? new List<string>()
                 : new List<string> { singlePhotoBase64 };
-
-        // Не более 5 фотографий в одном отчёте
-        if (encodedPhotos.Count > 5)
-            throw new ArgumentException("В отчёте допускается не более 5 фотографий.");
 
         // Если нет ни фото, ни голоса — медиа-блок отсутствует (это не ошибка, просто чек-лист)
         bool hasVoice = !string.IsNullOrWhiteSpace(voiceBase64);
@@ -108,7 +104,7 @@ public static class ReportMediaService
 
     /// <summary>
     /// Проверяет, что байты соответствуют формату WAV PCM 16 kHz mono 16-bit.
-    /// Все смещения и значения — 1-в-1 из оригинального InventoryApi.cs.
+    /// Проверяет заголовок, формат и допустимую длину вложения.
     /// </summary>
     private static void ValidateWavHeader(byte[] voice)
     {

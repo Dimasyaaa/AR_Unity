@@ -3,15 +3,17 @@ using System.Collections;
 using System.Collections.Generic;
 using TMPro;
 using UnityEngine;
+using UnityEngine.SceneManagement;
 using UnityEngine.UI;
+using ArInventory.Local;
 
 /// <summary>
-/// Управляет фотографиями, голосовым комментарием и отправкой итогового отчёта инвентаризации.
+/// Управляет фотографиями, текстовой заметкой и отправкой итогового отчёта инвентаризации.
 /// </summary>
 public sealed class InventoryReportCapture : MonoBehaviour
 {
-    private const int MaxReportPhotos = 5;
     private const int MaxReportPhotoBytes = 12 * 1024 * 1024;
+    [SerializeField, Range(2f, 3f)] private float autoReturnDelaySeconds = 3f;
     public static InventoryReportCapture Active { get; private set; }
 
     private InventoryChecklistController checklist;
@@ -24,6 +26,7 @@ public sealed class InventoryReportCapture : MonoBehaviour
     private TextMeshProUGUI cameraStatus;
     private TextMeshProUGUI reportStatus;
     private TextMeshProUGUI recordLabel;
+    private TMP_InputField noteInput;
     private Button cameraBack;
     private Button shutter;
     private Button addPhoto;
@@ -35,19 +38,17 @@ public sealed class InventoryReportCapture : MonoBehaviour
     private RawImage preview;
     private AspectRatioFitter previewAspect;
     private Texture2D image;
-    private AudioSource player;
-    private AudioClip recording;
-    private AudioClip voicePreview;
-    private string recordingDevice;
-    private float recordingStarted;
     private readonly List<byte[]> reportPhotos = new List<byte[]>();
-    private byte[] voiceWav;
+    private readonly Queue<DictationResult> dictationResults = new Queue<DictationResult>();
+    private readonly object dictationLock = new object();
+    private AndroidJavaObject dictationRecognizer;
+    private AndroidJavaObject dictationIntent;
     private bool takingPhoto;
-    private bool startingRecording;
-    private bool microphoneReserved;
-    private bool playingVoice;
+    private bool dictationActive;
+    private bool dictationMicrophoneReserved;
     private bool sending;
     private bool submitted;
+    private bool autoReturnPending;
     private bool configured;
     private InventoryReportCameraFallback cameraFallback;
 
@@ -105,6 +106,7 @@ public sealed class InventoryReportCapture : MonoBehaviour
         cameraBack = cameraFooter != null ? cameraFooter.Find("CameraBackButton")?.GetComponent<Button>() : null;
         shutter = cameraFooter != null ? cameraFooter.Find("ShutterButton")?.GetComponent<Button>() : null;
         reportStatus = reportPanel != null ? reportPanel.Find("ReportStatus")?.GetComponent<TextMeshProUGUI>() : null;
+        noteInput = reportPanel != null ? reportPanel.Find("VoiceActions/NoteInput")?.GetComponent<TMP_InputField>() : null;
         addPhoto = voiceActions != null ? voiceActions.Find("AddPhotoButton")?.GetComponent<Button>() : null;
         record = voiceActions != null ? voiceActions.Find("RecordButton")?.GetComponent<Button>() : null;
         play = voiceActions != null ? voiceActions.Find("PlayButton")?.GetComponent<Button>() : null;
@@ -114,14 +116,13 @@ public sealed class InventoryReportCapture : MonoBehaviour
         preview = photoPreview != null ? photoPreview.GetComponent<RawImage>() : null;
         previewAspect = photoPreview != null ? photoPreview.GetComponent<AspectRatioFitter>() : null;
         recordLabel = record != null ? record.GetComponentInChildren<TextMeshProUGUI>(true) : null;
-        player = GetComponent<AudioSource>();
         cameraFallback = GetComponent<InventoryReportCameraFallback>();
 
         bool ready = canvas != null && cameraControls != null && reportControls != null &&
             cameraStatus != null && cameraBack != null && shutter != null && reportStatus != null &&
-            addPhoto != null && record != null && play != null && recordLabel != null &&
+            addPhoto != null && record != null && play != null && recordLabel != null && noteInput != null &&
             closeReport != null && retake != null && send != null && preview != null &&
-            previewAspect != null && player != null && cameraFallback != null;
+            previewAspect != null && cameraFallback != null;
         if (!ready)
         {
             Debug.LogError("[Отчёт] В префабе InventoryReportCard не хватает элементов или компонентов. Проверьте имена дочерних объектов.");
@@ -133,8 +134,9 @@ public sealed class InventoryReportCapture : MonoBehaviour
         cameraBack.onClick.AddListener(Close);
         shutter.onClick.AddListener(TakePhoto);
         addPhoto.onClick.AddListener(ShowCamera);
-        record.onClick.AddListener(RecordOrStop);
-        play.onClick.AddListener(PlayVoice);
+        record.onClick.AddListener(StartDictation);
+        play.onClick.AddListener(ClearNote);
+        noteInput.onValueChanged.AddListener(_ => UpdateReportButtons());
         closeReport.onClick.AddListener(Close);
         retake.onClick.AddListener(ShowCamera);
         send.onClick.AddListener(Send);
@@ -145,29 +147,14 @@ public sealed class InventoryReportCapture : MonoBehaviour
         UpdateSafeArea();
         if (cameraControls != null && cameraControls.activeSelf && !takingPhoto)
             shutter.interactable = cameraFallback.CanCapture;
-        if (playingVoice && !player.isPlaying) StopVoicePlayback();
-        if (recording == null) return;
-
-        int frames = Microphone.GetPosition(recordingDevice);
-        float elapsed = Time.realtimeSinceStartup - recordingStarted;
-        if (frames >= recording.frequency * InventoryReportVoice.MaxSeconds)
-        {
-            StopRecording(Mathf.Min(frames, recording.frequency * InventoryReportVoice.MaxSeconds));
-        }
-        else if (elapsed >= 4 && frames <= 0)
-        {
-            AbortRecording();
-            reportStatus.text = "Микрофон не начал запись. Попробуйте ещё раз.";
-            UpdateReportButtons();
-        }
-        else
-            reportStatus.text = $"Идёт запись · {Mathf.FloorToInt(frames / (float)recording.frequency)} / 60 сек.";
+        PollDictationResults();
     }
 
     private void ShowCamera()
     {
         // В кадр попадёт весь экран приложения: чек-лист и размещённые AR-карточки.
-        StopVoicePlayback();
+        if (dictationActive)
+            CancelDictation("Надиктовка остановлена.");
         reportControls.SetActive(false);
         cameraControls.SetActive(true);
         cameraStatus.text = checklist != null
@@ -180,11 +167,6 @@ public sealed class InventoryReportCapture : MonoBehaviour
     {
         // Не запускаем несколько снимков одновременно и проверяем доступность камеры.
         if (takingPhoto || !cameraControls.activeSelf || !cameraFallback.CanCapture) return;
-        if (checklist != null && reportPhotos.Count >= MaxReportPhotos)
-        {
-            cameraStatus.text = $"В отчёт можно добавить не более {MaxReportPhotos} фотографий.";
-            return;
-        }
 #if UNITY_ANDROID && !UNITY_EDITOR
         using var version = new AndroidJavaClass("android.os.Build$VERSION");
         if (version.GetStatic<int>("SDK_INT") < 29 &&
@@ -252,144 +234,204 @@ public sealed class InventoryReportCapture : MonoBehaviour
         previewAspect.aspectRatio = image.width / (float)image.height;
         cameraControls.SetActive(false);
         reportControls.SetActive(true);
-        reportStatus.text = saved + $"\nФото в отчёте: {reportPhotos.Count}. Добавьте ещё снимки или запишите голос.";
+        // Полный путь к файлу полезен для диагностики, но на экране отчёта занимает место.
+        // Пользователю показываем короткий статус, а фото остаётся сохранённым в галерее и отчёте.
+        reportStatus.text = $"Фото сохранено. В отчёте снимков: {reportPhotos.Count}.\nМожно добавить ещё или надиктовать заметку.";
         UpdateReportButtons();
     }
 
-    public void RecordOrStop()
+    public void StartDictation()
     {
-        // Повторное нажатие на кнопку завершает текущую запись.
-        if (!reportControls.activeSelf || sending || submitted || startingRecording) return;
-        if (recording != null)
-        {
-            StopRecording(Microphone.GetPosition(recordingDevice));
-            return;
-        }
+        // Android распознаёт короткую фразу и сразу помещает её текст в заметку отчёта.
+        if (!reportControls.activeSelf || sending || submitted || dictationActive) return;
 #if UNITY_ANDROID && !UNITY_EDITOR
         if (!UnityEngine.Android.Permission.HasUserAuthorizedPermission(UnityEngine.Android.Permission.Microphone))
         {
             var callbacks = new UnityEngine.Android.PermissionCallbacks();
-            callbacks.PermissionGranted += _ => { if (this != null) RecordOrStop(); };
+            callbacks.PermissionGranted += _ => { if (this != null) StartDictation(); };
             callbacks.PermissionDenied += _ => { if (this != null) reportStatus.text = "Разрешите доступ к микрофону в настройках Android."; };
             UnityEngine.Android.Permission.RequestUserPermission(UnityEngine.Android.Permission.Microphone, callbacks);
             return;
         }
-#endif
-        startingRecording = true;
-        StopVoicePlayback();
-        SetMicrophoneReserved(true);
+        dictationActive = true;
+        dictationMicrophoneReserved = true;
+        VoiceController.Instance?.ReserveMicrophone(true);
+        reportStatus.text = "Слушаю заметку… Скажите фразу после сигнала распознавания.";
         UpdateReportButtons();
-        StartCoroutine(StartRecording());
+        RunOnAndroidUiThread(CreateAndStartDictation);
+#else
+        reportStatus.text = "Надиктовка доступна в Android. В редакторе введите заметку в поле вручную.";
+#endif
     }
 
-    private IEnumerator StartRecording()
+    public void ClearNote()
     {
-        // Даём Android время выдать микрофон после запроса разрешения.
-        reportStatus.text = "Подключаем микрофон…";
-        yield return new WaitForSecondsRealtime(.35f);
-        if (!startingRecording) yield break;
-        startingRecording = false;
+        if (sending || submitted || dictationActive) return;
+        noteInput.text = string.Empty;
+        reportStatus.text = "Текстовая заметка очищена.";
+        UpdateReportButtons();
+    }
+
+    private void CancelDictation(string message)
+    {
+        if (!dictationActive) return;
+        dictationActive = false;
+        StopDictationRecognizer();
+        if (dictationMicrophoneReserved)
+        {
+            dictationMicrophoneReserved = false;
+            VoiceController.Instance?.ReserveMicrophone(false);
+        }
+        reportStatus.text = message;
+        UpdateReportButtons();
+    }
+
+    private void CreateAndStartDictation()
+    {
         try
         {
-            var devices = Microphone.devices;
-            if (devices.Length == 0) throw new InvalidOperationException("Микрофон не найден.");
-            recordingDevice = devices[0];
-            Microphone.GetDeviceCaps(recordingDevice, out int minRate, out int maxRate);
-            int rate = maxRate > 0 ? Mathf.Clamp(InventoryReportVoice.Rate, minRate, maxRate) : InventoryReportVoice.Rate;
-            recording = Microphone.Start(recordingDevice, false, InventoryReportVoice.MaxSeconds + 1, rate);
-            if (recording == null) throw new InvalidOperationException("Микрофон не начал запись.");
-            recordingStarted = Time.realtimeSinceStartup;
-            reportStatus.text = "Идёт запись…";
+            using var unityPlayer = new AndroidJavaClass("com.unity3d.player.UnityPlayer");
+            using var activity = unityPlayer.GetStatic<AndroidJavaObject>("currentActivity");
+            using var recognizerClass = new AndroidJavaClass("android.speech.SpeechRecognizer");
+            using var androidVersion = new AndroidJavaClass("android.os.Build$VERSION");
+
+            int apiLevel = androidVersion.GetStatic<int>("SDK_INT");
+            bool onDeviceAvailable = apiLevel >= 31 &&
+                recognizerClass.CallStatic<bool>("isOnDeviceRecognitionAvailable", activity);
+            dictationRecognizer = onDeviceAvailable
+                ? recognizerClass.CallStatic<AndroidJavaObject>("createOnDeviceSpeechRecognizer", activity)
+                : recognizerClass.CallStatic<AndroidJavaObject>("createSpeechRecognizer", activity);
+            dictationRecognizer.Call("setRecognitionListener", new DictationListener(this));
+
+            dictationIntent = new AndroidJavaObject("android.content.Intent", "android.speech.action.RECOGNIZE_SPEECH");
+            dictationIntent.Call<AndroidJavaObject>("putExtra", "android.speech.extra.LANGUAGE_MODEL", "free_form");
+            dictationIntent.Call<AndroidJavaObject>("putExtra", "android.speech.extra.LANGUAGE", "ru-RU");
+            dictationIntent.Call<AndroidJavaObject>("putExtra", "android.speech.extra.PREFER_OFFLINE", true);
+            dictationIntent.Call<AndroidJavaObject>("putExtra", "android.speech.extra.PARTIAL_RESULTS", false);
+            dictationIntent.Call<AndroidJavaObject>("putExtra", "android.speech.extra.MAX_RESULTS", 1);
+            dictationRecognizer.Call("startListening", dictationIntent);
         }
         catch (Exception error)
         {
-            AbortRecording();
-            reportStatus.text = error.Message;
+            QueueDictationResult(string.Empty, "Не удалось запустить распознавание речи: " + error.Message);
+        }
+    }
+
+    private void RunOnAndroidUiThread(Action action)
+    {
+        using var unityPlayer = new AndroidJavaClass("com.unity3d.player.UnityPlayer");
+        using var activity = unityPlayer.GetStatic<AndroidJavaObject>("currentActivity");
+        activity.Call("runOnUiThread", new AndroidRunnable(action));
+    }
+
+    private void QueueDictationResult(string text, string error)
+    {
+        lock (dictationLock)
+            dictationResults.Enqueue(new DictationResult(text, error));
+    }
+
+    private void PollDictationResults()
+    {
+        DictationResult result;
+        lock (dictationLock)
+        {
+            if (dictationResults.Count == 0) return;
+            result = dictationResults.Dequeue();
+        }
+
+        if (!dictationActive) return;
+        dictationActive = false;
+        if (!string.IsNullOrWhiteSpace(result.text))
+        {
+            string existing = noteInput.text.Trim();
+            noteInput.text = string.IsNullOrEmpty(existing) ? result.text.Trim() : existing + " " + result.text.Trim();
+            reportStatus.text = "Речь распознана и добавлена в текстовую заметку.";
+        }
+        else
+            reportStatus.text = string.IsNullOrWhiteSpace(result.error) ? "Не удалось распознать фразу. Попробуйте ещё раз." : result.error;
+
+        StopDictationRecognizer();
+        if (dictationMicrophoneReserved)
+        {
+            dictationMicrophoneReserved = false;
+            VoiceController.Instance?.ReserveMicrophone(false);
         }
         UpdateReportButtons();
     }
 
-    private void StopRecording(int frames)
+    private void StopDictationRecognizer()
     {
-        // Завершаем запись, проверяем её длительность и кодируем WAV для API.
+#if UNITY_ANDROID && !UNITY_EDITOR
         try
         {
-            Microphone.End(recordingDevice);
-            if (frames < recording.frequency / 4)
-                throw new InvalidOperationException("Запись слишком короткая. Попробуйте ещё раз.");
-            var encoded = InventoryReportVoice.Encode(recording, Mathf.Min(frames, recording.samples), out var clip);
-            if (voicePreview != null) Destroy(voicePreview);
-            voicePreview = clip;
-            voiceWav = encoded;
-            reportStatus.text = $"Голосовое сообщение готово · {clip.length:0.#} сек.";
+            RunOnAndroidUiThread(() =>
+            {
+                try { dictationRecognizer?.Call("cancel"); } catch { }
+                try { dictationRecognizer?.Call("destroy"); } catch { }
+                dictationRecognizer?.Dispose();
+                dictationRecognizer = null;
+                dictationIntent?.Dispose();
+                dictationIntent = null;
+            });
         }
-        catch (Exception error) { reportStatus.text = error.Message; }
-        finally
-        {
-            Destroy(recording);
-            recording = null;
-            SetMicrophoneReserved(false);
-            UpdateReportButtons();
-        }
-    }
-
-    private void AbortRecording()
-    {
-        startingRecording = false;
-        if (recording != null)
-        {
-            Microphone.End(recordingDevice);
-            Destroy(recording);
-            recording = null;
-        }
-        SetMicrophoneReserved(false);
-    }
-
-    private void SetMicrophoneReserved(bool reserved)
-    {
-        if (microphoneReserved == reserved) return;
-        microphoneReserved = reserved;
-        VoiceController.Instance?.ReserveMicrophone(reserved);
-    }
-
-    public void PlayVoice()
-    {
-        // Проигрывание использует готовую копию записи и временно резервирует микрофон.
-        if (voicePreview == null || IsRecording || sending || !reportControls.activeSelf) return;
-        if (playingVoice) { StopVoicePlayback(); return; }
-        SetMicrophoneReserved(true);
-        playingVoice = true;
-        player.clip = voicePreview;
-        player.Play();
-    }
-
-    private void StopVoicePlayback()
-    {
-        if (!playingVoice) return;
-        playingVoice = false;
-        player.Stop();
-        SetMicrophoneReserved(false);
+        catch (Exception error) { Debug.LogWarning("[Отчёт] Не удалось закрыть распознаватель: " + error.Message); }
+#endif
     }
 
     public void Send()
     {
-        // Отправка требует хотя бы одного фото, голосового комментария и активного чек-листа.
-        if (sending || submitted || IsRecording || reportPhotos.Count == 0 || voiceWav == null || checklist == null)
+        // Для отправки нужны завершённый чек-лист и фото; текстовую заметку можно не добавлять.
+        if (sending || submitted || dictationActive || reportPhotos.Count == 0 || checklist == null)
             return;
-        StopVoicePlayback();
         sending = true;
         UpdateReportButtons();
-        checklist.SubmitReport(reportPhotos, voiceWav, (savedLocally, message) =>
+        checklist.SubmitReport(reportPhotos, noteInput.text.Trim(), (savedLocally, message) =>
         {
             if (this == null) return;
             sending = false;
             submitted = savedLocally;
             reportStatus.text = message;
             UpdateReportButtons();
+            if (savedLocally)
+                StartCoroutine(ReturnToNextAssignedBox(message));
         }, message => reportStatus.text = message);
     }
 
-    private bool IsRecording => startingRecording || recording != null;
+    /// <summary>После сохранения отчёта возвращает сотрудника к следующему назначенному QR-коду.</summary>
+    private IEnumerator ReturnToNextAssignedBox(string savedMessage)
+    {
+        autoReturnPending = true;
+        UpdateReportButtons();
+        reportStatus.text = (string.IsNullOrWhiteSpace(savedMessage) ? "Отчёт сохранён." : savedMessage) +
+                            $"\nЧерез {autoReturnDelaySeconds:0.#} сек. откроется сканер следующей коробки.";
+
+        yield return new WaitForSecondsRealtime(Mathf.Clamp(autoReturnDelaySeconds, 2f, 3f));
+
+        LocalDatabase database = LocalDatabase.Instance;
+        LocalInventoryBatch batch = database != null && database.IsReady
+            ? database.GetActiveInventoryBatch(SessionManager.UserId)
+            : null;
+        bool hasNextAssignedBox = batch != null &&
+            database.GetCompletedBoxCount(batch.client_batch_id) < batch.expected_box_count;
+
+        if (hasNextAssignedBox)
+        {
+            QRNavigationController navigation = FindAnyObjectByType<QRNavigationController>(FindObjectsInactive.Include);
+            if (navigation != null)
+            {
+                navigation.ContinueAfterReport(gameObject);
+                yield break;
+            }
+
+            Destroy(gameObject);
+            MainMenuManager.ResumeAssignedInventoryScan();
+            yield break;
+        }
+
+        // Последняя коробка завершена: главное меню покажет сотруднику сводную таблицу.
+        Destroy(gameObject);
+        SceneManager.LoadScene("StartScene");
+    }
 
     public void Close()
     {
@@ -401,30 +443,31 @@ public sealed class InventoryReportCapture : MonoBehaviour
     private void UpdateReportButtons()
     {
         // Доступность кнопок зависит от текущего этапа заполнения отчёта.
-        record.interactable = !startingRecording && !sending && !submitted;
-        recordLabel.text = recording != null ? "Стоп" : voiceWav != null ? "Перезаписать" : "Записать голос";
-        closeReport.interactable = !sending;
-        retake.interactable = !IsRecording && !sending && !submitted;
-        play.interactable = voiceWav != null && !IsRecording && !sending;
-        send.interactable = !IsRecording && !sending && !submitted && reportPhotos.Count > 0 && voiceWav != null;
+        record.interactable = !dictationActive && !sending && !submitted;
+        recordLabel.text = dictationActive ? "Слушаю…" : "Надиктовать";
+        addPhoto.interactable = !sending && !submitted && !autoReturnPending;
+        closeReport.interactable = !sending && !autoReturnPending;
+        retake.interactable = !dictationActive && !sending && !submitted;
+        play.interactable = !string.IsNullOrWhiteSpace(noteInput.text) && !dictationActive && !sending && !submitted;
+        send.interactable = !dictationActive && !sending && !submitted && reportPhotos.Count > 0;
     }
 
     private void OnApplicationPause(bool paused)
     {
         if (!paused) return;
-        StopVoicePlayback();
-        if (!IsRecording) return;
-        AbortRecording();
-        reportStatus.text = "Запись остановлена. Можно записать сообщение заново.";
-        UpdateReportButtons();
+        CancelDictation("Надиктовка остановлена при сворачивании приложения.");
     }
 
     private void OnDestroy()
     {
-        AbortRecording();
+        dictationActive = false;
+        StopDictationRecognizer();
+        if (dictationMicrophoneReserved)
+        {
+            dictationMicrophoneReserved = false;
+            VoiceController.Instance?.ReserveMicrophone(false);
+        }
         if (image != null) Destroy(image);
-        if (player != null) player.Stop();
-        if (voicePreview != null) Destroy(voicePreview);
         if (Active == this) Active = null;
     }
 
@@ -441,6 +484,63 @@ public sealed class InventoryReportCapture : MonoBehaviour
         safeArea.anchorMax = new Vector2(area.xMax / size.x, area.yMax / size.y);
         safeArea.offsetMin = Vector2.zero;
         safeArea.offsetMax = Vector2.zero;
+    }
+
+    /// <summary>Результат распознавания передаётся из потока Android в Update Unity.</summary>
+    private readonly struct DictationResult
+    {
+        public readonly string text;
+        public readonly string error;
+        public DictationResult(string text, string error) { this.text = text; this.error = error; }
+    }
+
+    /// <summary>Адаптер Android RecognitionListener: обновления интерфейса выполняются позже на потоке Unity.</summary>
+    private sealed class DictationListener : AndroidJavaProxy
+    {
+        private readonly InventoryReportCapture owner;
+        public DictationListener(InventoryReportCapture owner) : base("android.speech.RecognitionListener") => this.owner = owner;
+        public void onReadyForSpeech(AndroidJavaObject parameters) { }
+        public void onBeginningOfSpeech() { }
+        public void onRmsChanged(float value) { }
+        public void onBufferReceived(byte[] buffer) { }
+        public void onEndOfSpeech() { }
+        public void onError(int errorCode) => owner?.QueueDictationResult(string.Empty, DescribeSpeechError(errorCode));
+        public void onResults(AndroidJavaObject results)
+        {
+            try
+            {
+                using var recognized = results.Call<AndroidJavaObject>("getStringArrayList", "results_recognition");
+                string text = recognized != null && recognized.Call<int>("size") > 0
+                    ? recognized.Call<string>("get", 0)
+                    : string.Empty;
+                owner?.QueueDictationResult(text, string.Empty);
+            }
+            catch (Exception error) { owner?.QueueDictationResult(string.Empty, error.Message); }
+        }
+        public void onPartialResults(AndroidJavaObject results) { }
+        public void onEvent(int eventType, AndroidJavaObject parameters) { }
+    }
+
+    /// <summary>Выполняет Android API, которым требуется основной поток Activity.</summary>
+    private sealed class AndroidRunnable : AndroidJavaProxy
+    {
+        private readonly Action action;
+        public AndroidRunnable(Action action) : base("java.lang.Runnable") => this.action = action;
+        public void run() => action?.Invoke();
+    }
+
+    private static string DescribeSpeechError(int errorCode)
+    {
+        switch (errorCode)
+        {
+            case 1: return "Служба распознавания речи недоступна.";
+            case 2: return "Нет подключения к службе распознавания. Проверьте сеть или офлайн-пакет языка.";
+            case 3: return "Не удалось открыть микрофон.";
+            case 6: return "Не удалось распознать фразу. Попробуйте ещё раз.";
+            case 7: return "Речь не распознана. Повторите фразу.";
+            case 9: return "Не выдано разрешение на использование микрофона.";
+            default: return $"Распознавание завершилось с ошибкой {errorCode}. Попробуйте ещё раз.";
+        }
     }
 
 }

@@ -48,6 +48,9 @@ Assets/_Recovery/
 Assets/StreamingAssets/inventory.db
 *.db
 
+# Временные артефакты Codex и локальные дампы PostgreSQL
+.codex-tmp/
+
 # NuGet пакеты (кэш NuGetForUnity)
 Assets/Packages/
 

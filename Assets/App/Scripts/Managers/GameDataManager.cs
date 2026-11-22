@@ -5,6 +5,6 @@
 public static class GameDataManager
 {
     // MainMenuManager записывает QR перед открытием SampleScene,
-    // а AR-карточки читают его при загрузке данных шкафа.
+    // а AR-карточки читают его при загрузке данных коробки.
     public static string LastScannedQR { get; set; }
 }

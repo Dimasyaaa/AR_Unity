@@ -12,7 +12,7 @@ document.querySelectorAll('.tab').forEach(tab => {
     });
     if (name === 'users') loadUsers();
     if (name === 'qr') loadQr();
-    if (name === 'inventory') loadInventoryCabinets();
+    if (name === 'inventory') loadInventoryBoxes();
     if (name === 'runs') loadInventoryRuns();
     if (name === 'sessions') loadSessions();
   };
@@ -293,13 +293,13 @@ async function saveQr() {
 }
 
 async function deleteQr(id) {
-  if (!confirm('Удалить QR-код? Если он привязан к шкафу, вместе с ним будут удалены шкаф, фотографии, чек-лист и вся история инвентаризаций. У обычного QR события журнала сохранятся без связи с кодом. Действие необратимо.')) return;
+  if (!confirm('Удалить QR-код? Если он обозначает коробку, вместе с ней будут удалены изображения, перечень и история инвентаризаций. У обычного QR события журнала сохранятся без связи с кодом. Действие необратимо.')) return;
   try {
     const res = await fetch(`${API}/api/admin/qr/${id}`, { method: 'DELETE' });
     const data = await res.json();
     if (!res.ok) return toast(data.message || 'Ошибка', 'error');
     toast(data.message);
-    await Promise.all([loadQr(), loadInventoryCabinets(), loadInventoryRuns(), loadSessions()]);
+    await Promise.all([loadQr(), loadInventoryBoxes(), loadInventoryRuns(), loadSessions()]);
   } catch (error) {
     toast('Не удалось удалить QR-код: ' + error.message, 'error');
   }
@@ -379,6 +379,7 @@ document.getElementById('sessions-search').addEventListener('input', renderSessi
 // Результаты инвентаризации, отправленные приложением через API
 let inventoryRunsData = [];
 let inventoryRunsLoadInFlight = false;
+let inventoryBatchesData = [];
 
 async function loadInventoryRuns(silent = false) {
   if (inventoryRunsLoadInFlight) return;
@@ -390,6 +391,7 @@ async function loadInventoryRuns(silent = false) {
     const data = await res.json();
     inventoryRunsData = Array.isArray(data) ? data : (data.items || []);
     renderInventoryRuns();
+    loadInventoryBatches(true);
   } catch (error) {
     tbody.innerHTML = `<tr><td colspan="6" class="empty">${escapeHtml(error.message)}</td></tr>`;
     if (!silent) toast('Не удалось загрузить результаты инвентаризации', 'error');
@@ -398,12 +400,52 @@ async function loadInventoryRuns(silent = false) {
   }
 }
 
+async function loadInventoryBatches(silent = false) {
+  const tbody = document.getElementById('inventory-batches-body');
+  try {
+    const res = await fetch(`${API}/api/admin/inventory/batches`);
+    if (!res.ok) throw new Error('Сервер не смог загрузить общие проверки');
+    const data = await res.json();
+    inventoryBatchesData = Array.isArray(data) ? data : (data.items || []);
+    renderInventoryBatches();
+  } catch (error) {
+    tbody.innerHTML = `<tr><td colspan="6" class="empty">${escapeHtml(error.message)}</td></tr>`;
+    if (!silent) toast('Не удалось загрузить общие проверки', 'error');
+  }
+}
+
+function renderInventoryBatches() {
+  const tbody = document.getElementById('inventory-batches-body');
+  if (!inventoryBatchesData.length) {
+    tbody.innerHTML = '<tr><td colspan="6" class="empty">Пока нет общих инвентаризаций коробок.</td></tr>';
+    return;
+  }
+
+  tbody.innerHTML = inventoryBatchesData.map(batch => {
+    const completed = Number(batch.completedBoxCount) || 0;
+    const expected = Number(batch.expectedBoxCount) || 0;
+    const done = batch.status === 'completed';
+    const assigned = batch.status === 'assigned';
+    return `<tr>
+      <td>${formatDateTime(batch.completedAt || batch.startedAt)}</td>
+      <td>${escapeHtml(batch.userFullName || '--')}</td>
+      <td>${escapeHtml(batch.userDepartment || '--')}</td>
+      <td>${completed} / ${expected}</td>
+      <td><span class="badge ${done ? 'badge-success' : 'badge-warning'}">${done ? 'Завершена' : assigned ? 'Назначена' : 'В процессе'}</span></td>
+      <td class="row-actions">
+        <button class="btn btn-secondary btn-sm" onclick="showInventoryBatch(${Number(batch.id)})">Сводка</button>
+        <a class="btn btn-primary btn-sm" href="${API}/api/admin/inventory/batches/${Number(batch.id)}/excel">Excel</a>
+      </td>
+    </tr>`;
+  }).join('');
+}
+
 function renderInventoryRuns() {
   const search = document.getElementById('search-runs').value.trim().toLocaleLowerCase('ru-RU');
   const groupBy = document.getElementById('group-runs-by').value;
   const tbody = document.getElementById('inventory-runs-body');
   const rows = inventoryRunsData.filter(run =>
-    [run.userFullName, run.userDepartment, run.cabinetTitle, run.qrCode]
+    [run.userFullName, run.userDepartment, run.boxTitle, run.qrCode]
       .some(value => String(value || '').toLocaleLowerCase('ru-RU').includes(search))
   );
   if (!rows.length) {
@@ -416,8 +458,8 @@ function renderInventoryRuns() {
       <td>${formatDateTime(run.completedAt)}</td>
       <td>${escapeHtml(run.userFullName || '--')}</td>
       <td>${escapeHtml(run.userDepartment || '--')}</td>
-      <td><strong>${escapeHtml(run.cabinetTitle || '--')}</strong><div class="sub-cell"><code>${escapeHtml(run.qrCode || '--')}</code></div></td>
-      <td><span class="badge badge-success">Есть: ${Number(run.presentCount) || 0}</span> <span class="badge badge-danger">Нет: ${Number(run.missingCount) || 0}</span></td>
+      <td><strong>${escapeHtml(run.boxTitle || '--')}</strong><div class="sub-cell"><code>${escapeHtml(run.qrCode || '--')}</code></div></td>
+      <td><span class="badge badge-success">Есть: ${Number(run.presentCount) || 0}</span> <span class="badge badge-warning">Частично: ${Number(run.partialCount) || 0}</span> <span class="badge badge-danger">Нет: ${Number(run.missingCount) || 0}</span></td>
       <td><button class="btn btn-secondary btn-sm" onclick="showInventoryRun(${Number(run.id)})">Подробнее</button></td>
     </tr>
   `;
@@ -439,7 +481,7 @@ function renderInventoryRuns() {
       subtitle = run.userDepartment || '';
       key = `${title}\u0000${subtitle}`;
     } else {
-      title = run.cabinetTitle || 'Шкаф не указан';
+      title = run.boxTitle || 'Коробка не указана';
       subtitle = run.qrCode || '';
       key = `${title}\u0000${subtitle}`;
     }
@@ -474,8 +516,24 @@ inventoryItemsInput.addEventListener('input', renderInventoryItemsPreview);
 
 function renderInventoryItemsPreview() {
   const preview = document.getElementById('inventory-items-preview');
-  const names = inventoryItemsInput.value.split(/\r?\n/).map(name => name.trim()).filter(Boolean);
-  preview.innerHTML = names.map(name => `<li>${escapeHtml(name)}</li>`).join('') || '<li class="checklist-preview-empty">Предметы появятся здесь в указанном порядке</li>';
+  const items = parseInventoryItemLines(inventoryItemsInput.value);
+  preview.innerHTML = items.map(item => `<li>${escapeHtml(item.name)} <span class="hint">· по учёту: ${item.expectedQuantity} · 3D: ${escapeHtml(item.modelType)}</span></li>`).join('') || '<li class="checklist-preview-empty">Позиции появятся здесь в указанном порядке</li>';
+}
+
+// Разбирает название, учётное количество и тип тестовой 3D-фигуры.
+function parseInventoryItemLines(value) {
+  return value.split(/\r?\n/).map(line => {
+    const trimmed = line.trim();
+    if (!trimmed) return null;
+    const [rawName, rawQuantity, rawModelType] = trimmed.split('|');
+    const quantity = rawQuantity === undefined ? 1 : Number(rawQuantity.trim());
+    const modelType = (rawModelType || 'cube').trim().toLowerCase();
+    return {
+      name: rawName.trim(),
+      expectedQuantity: Number.isInteger(quantity) && quantity > 0 ? quantity : 0,
+      modelType: ['cube', 'sphere', 'cylinder', 'cone', 'capsule'].includes(modelType) ? modelType : 'cube'
+    };
+  }).filter(Boolean);
 }
 
 async function showInventoryRun(id) {
@@ -483,19 +541,26 @@ async function showInventoryRun(id) {
     const res = await fetch(`${API}/api/admin/inventory/runs/${id}`);
     const run = await res.json();
     if (!res.ok) return toast(run.message || 'Не удалось открыть проверку', 'error');
-    document.getElementById('inventory-run-title').textContent = run.cabinetTitle || 'Результат инвентаризации';
+    document.getElementById('inventory-run-title').textContent = run.boxTitle || 'Результат инвентаризации';
     document.getElementById('inventory-run-meta').innerHTML = `
       <div><span>Сотрудник</span><strong>${escapeHtml(run.userFullName || '--')}</strong></div>
       <div><span>Отдел</span><strong>${escapeHtml(run.userDepartment || '--')}</strong></div>
       <div><span>QR-код</span><strong><code>${escapeHtml(run.qrCode || '--')}</code></strong></div>
       <div><span>Завершена</span><strong>${formatDateTime(run.completedAt)}</strong></div>`;
-    document.getElementById('inventory-run-items').innerHTML = (run.items || []).map((item, index) => `
-      <tr><td class="run-item-number">${index + 1}</td><td>${escapeHtml(item.itemName || '--')}</td><td><span class="badge ${item.status === 'present' ? 'badge-success' : 'badge-danger'}">${item.status === 'present' ? 'Есть' : 'Нет'}</span></td><td>${escapeHtml(item.comment || '—')}</td></tr>
-    `).join('') || '<tr><td colspan="4" class="empty">В этой проверке нет пунктов.</td></tr>';
+    document.getElementById('inventory-run-items').innerHTML = (run.items || []).map((item, index) => {
+      const actual = Number(item.actualQuantity) || 0;
+      const expected = Number(item.expectedQuantity) || 0;
+      const status = actual === 0 ? 'Нет' : actual < expected ? 'Частично' : 'Есть';
+      const badge = actual === 0 ? 'badge-danger' : actual < expected ? 'badge-warning' : 'badge-success';
+      return `<tr><td class="run-item-number">${index + 1}</td><td>${escapeHtml(item.itemName || '--')}</td><td>${actual} / ${expected}</td><td><span class="badge ${badge}">${status}</span></td><td>${escapeHtml(item.comment || '—')}</td></tr>`;
+    }).join('') || '<tr><td colspan="5" class="empty">В этой проверке нет пунктов.</td></tr>';
     const media = document.getElementById('inventory-run-media');
     const mediaUrl = `${API}/api/admin/inventory/runs/${Number(run.id)}/media`;
     const photoUrls = run.photoUrls?.length ? run.photoUrls : (run.photoUrl ? [`${mediaUrl}/photo`] : []);
+    const reportNote = String(run.reportNote || '').trim();
     media.innerHTML = [
+      reportNote ? `<section class="run-note"><strong>Заметка сотрудника</strong>
+        <p>${escapeHtml(reportNote).replace(/\r?\n/g, '<br>')}</p></section>` : '',
       ...photoUrls.map((url, index) => `<figure><figcaption>Фото ${index + 1}</figcaption>
         <a href="${API}${escapeHtml(url)}" target="_blank" rel="noopener"><img src="${API}${escapeHtml(url)}" alt="Фото ${index + 1} отчёта"></a>
         </figure>`),
@@ -506,6 +571,32 @@ async function showInventoryRun(id) {
     document.getElementById('modal-inventory-run').classList.add('open');
   } catch (error) {
     toast('Ошибка загрузки проверки: ' + error.message, 'error');
+  }
+}
+
+async function showInventoryBatch(id) {
+  try {
+    const batch = inventoryBatchesData.find(item => Number(item.id) === Number(id));
+    const res = await fetch(`${API}/api/admin/inventory/batches/${Number(id)}/rows`);
+    const rows = await res.json();
+    if (!res.ok) return toast(rows.message || 'Не удалось открыть сводную таблицу', 'error');
+
+    document.getElementById('inventory-batch-title').textContent = `Инвентаризация коробок · ${batch?.completedBoxCount || 0} / ${batch?.expectedBoxCount || 0}`;
+    document.getElementById('inventory-batch-meta').innerHTML = `
+      <div><span>Сотрудник</span><strong>${escapeHtml(batch?.userFullName || rows[0]?.userFullName || '--')}</strong></div>
+      <div><span>Отдел</span><strong>${escapeHtml(batch?.userDepartment || rows[0]?.department || '--')}</strong></div>
+      <div><span>Начата</span><strong>${formatDateTime(batch?.startedAt)}</strong></div>
+      <div><span>Состояние</span><strong>${batch?.status === 'completed' ? 'Завершена' : 'В процессе'}</strong></div>`;
+    document.getElementById('inventory-batch-rows').innerHTML = rows.map(row => {
+      const actual = Number(row.actualQuantity) || 0;
+      const expected = Number(row.expectedQuantity) || 0;
+      const status = actual === 0 ? 'Нет' : actual < expected ? 'Частично' : 'Есть';
+      const badge = actual === 0 ? 'badge-danger' : actual < expected ? 'badge-warning' : 'badge-success';
+      return `<tr><td>${escapeHtml(row.boxTitle || '--')}</td><td><code>${escapeHtml(row.qrCode || '--')}</code></td><td>${escapeHtml(row.itemName || '--')}</td><td>${expected}</td><td>${actual}</td><td><span class="badge ${badge}">${status}</span></td><td>${escapeHtml(row.comment || '—')}</td></tr>`;
+    }).join('');
+    document.getElementById('modal-inventory-batch').classList.add('open');
+  } catch (error) {
+    toast('Ошибка загрузки сводной таблицы: ' + error.message, 'error');
   }
 }
 
@@ -555,148 +646,222 @@ function escapeHtml(s) {
   }[c]));
 }
 
-// ШКАФЫ И ЧЕК-ЛИСТЫ
-let inventoryCabinets = [];
+// Коробки, изображения содержимого и тестовые 3D-модели
+let inventoryBoxes = [];
 let inventoryCurrent = null;
 const photosMarkedForRemoval = new Set();
+let removeCurrentModel = false;
+let inventoryPhotoDrafts = [];
+let nextInventoryPhotoKey = 1;
 
-async function loadInventoryCabinets() {
+async function loadInventoryBoxes() {
   try {
-    const response = await fetch(`${API}/api/admin/inventory/cabinets`);
-    if (!response.ok) throw new Error('Сервер не вернул список шкафов');
-    inventoryCabinets = await response.json();
-    renderInventoryCabinets();
+    const response = await fetch(`${API}/api/admin/inventory/boxes`);
+    if (!response.ok) throw new Error('Сервер не вернул список коробок');
+    inventoryBoxes = await response.json();
+    renderInventoryBoxes();
   } catch (error) {
-    document.getElementById('inventory-cabinets-body').innerHTML = `<tr><td colspan="5" class="empty">Не удалось загрузить список: ${escapeHtml(error.message)}. Проверьте, что сервер запущен.</td></tr>`;
-    toast('Не удалось загрузить шкафы: ' + error.message, 'error');
+    document.getElementById('inventory-boxes-body').innerHTML = `<tr><td colspan="6" class="empty">Не удалось загрузить список: ${escapeHtml(error.message)}. Проверьте, что сервер запущен.</td></tr>`;
+    toast('Не удалось загрузить коробки: ' + error.message, 'error');
   }
 }
 
-async function openNewInventoryCabinet() {
+async function openNewInventoryBox() {
   try {
-    await loadInventoryCabinets();
-    const available = inventoryCabinets.filter(item => !item.cabinetId);
+    await loadInventoryBoxes();
+    const available = inventoryBoxes.filter(item => !item.boxId);
     const select = document.getElementById('new-inventory-qr');
     select.innerHTML = available.map(item => `<option value="${Number(item.qrCodeId)}">${escapeHtml(item.qrCode)}${item.objectName ? ` — ${escapeHtml(item.objectName)}` : ''}</option>`).join('');
     if (!available.length) {
       toast('Нет свободных QR-кодов. Сначала добавьте QR-код во вкладке «QR-коды».', 'error');
       return;
     }
-    document.getElementById('modal-new-inventory-cabinet').classList.add('open');
+    document.getElementById('modal-new-inventory-box').classList.add('open');
   } catch (error) {
     toast('Не удалось получить список QR-кодов: ' + error.message, 'error');
   }
 }
 
-function createInventoryCabinetFromQr() {
+function createInventoryBoxFromQr() {
   const qrCodeId = Number(document.getElementById('new-inventory-qr').value);
   if (!qrCodeId) return toast('Выберите QR-код.', 'error');
-  closeModal('modal-new-inventory-cabinet');
-  openInventoryCabinet(qrCodeId);
+  closeModal('modal-new-inventory-box');
+  openInventoryBox(qrCodeId);
 }
 
-function renderInventoryCabinets() {
-  const tbody = document.getElementById('inventory-cabinets-body');
+function renderInventoryBoxes() {
+  const tbody = document.getElementById('inventory-boxes-body');
   const search = (document.getElementById('search-inventory').value || '').toLowerCase();
-  const rows = inventoryCabinets.filter(item =>
+    const rows = inventoryBoxes.filter(item =>
     item.qrCode.toLowerCase().includes(search) || item.title.toLowerCase().includes(search) ||
     item.objectName.toLowerCase().includes(search));
   if (!rows.length) {
-    tbody.innerHTML = '<tr><td colspan="5" class="empty">QR-коды не найдены. Сначала создайте код во вкладке «QR-коды».</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="6" class="empty">QR-коды не найдены. Сначала создайте код во вкладке «QR-коды».</td></tr>';
     return;
   }
   tbody.innerHTML = rows.map(item => `
     <tr>
       <td><code>${escapeHtml(item.qrCode)}</code><div class="hint">${escapeHtml(item.objectName)}</div></td>
-      <td>${item.cabinetId ? escapeHtml(item.title) : '<span class="badge badge-warning">Не настроен</span>'}</td>
+      <td>${item.boxId ? escapeHtml(item.title) : '<span class="badge badge-warning">Не настроена</span>'}</td>
       <td>${item.photoAvailable ? '<span class="badge badge-success">Добавлено</span>' : '<span class="badge badge-warning">Нет фото</span>'}</td>
+      <td>${item.modelAvailable ? '<span class="badge badge-success">GLB добавлена</span>' : '<span class="badge badge-warning">Примитивы</span>'}</td>
       <td>${item.itemCount}</td>
       <td><div class="row-actions">
-        <button class="btn btn-secondary btn-sm" onclick="openInventoryCabinet(${item.qrCodeId})">${item.cabinetId ? 'Настроить' : 'Создать шкаф'}</button>
-        ${item.cabinetId ? `<button class="btn btn-danger btn-sm" onclick="deleteInventoryCabinet(${item.qrCodeId})">Удалить шкаф</button>` : ''}
+        <button class="btn btn-secondary btn-sm" onclick="openInventoryBox(${item.qrCodeId})">${item.boxId ? 'Настроить' : 'Создать коробку'}</button>
+        ${item.boxId ? `<button class="btn btn-danger btn-sm" onclick="deleteInventoryBox(${item.qrCodeId})">Удалить коробку</button>` : ''}
       </div></td>
     </tr>`).join('');
 }
 
-async function deleteInventoryCabinet(qrCodeId) {
-  const cabinet = inventoryCabinets.find(item => Number(item.qrCodeId) === Number(qrCodeId));
-  if (!cabinet?.cabinetId) return toast('Настроенный шкаф не найден.', 'error');
-  const title = cabinet.title || cabinet.objectName || cabinet.qrCode;
-  if (!confirm(`Удалить шкаф «${title}» (${cabinet.qrCode}) вместе с QR-кодом, фотографиями, чек-листом и всей историей инвентаризаций? Это действие нельзя отменить.`)) return;
+async function deleteInventoryBox(qrCodeId) {
+  const box = inventoryBoxes.find(item => Number(item.qrCodeId) === Number(qrCodeId));
+  if (!box?.boxId) return toast('Настроенная коробка не найдена.', 'error');
+  const title = box.title || box.objectName || box.qrCode;
+  if (!confirm(`Удалить коробку «${title}» (${box.qrCode}) вместе с QR-кодом, фотографиями, перечнем и всей историей инвентаризаций? Это действие нельзя отменить.`)) return;
 
   try {
-    const response = await fetch(`${API}/api/admin/inventory/cabinets/${qrCodeId}`, { method: 'DELETE' });
+    const response = await fetch(`${API}/api/admin/inventory/boxes/${qrCodeId}`, { method: 'DELETE' });
     const data = await response.json();
-    if (!response.ok) throw new Error(data.message || 'Не удалось удалить шкаф');
-    toast(data.message || 'Шкаф и его история удалены');
-    await Promise.all([loadInventoryCabinets(), loadInventoryRuns()]);
+    if (!response.ok) throw new Error(data.message || 'Не удалось удалить коробку');
+    toast(data.message || 'Коробка и её история удалены');
+    await Promise.all([loadInventoryBoxes(), loadInventoryRuns()]);
   } catch (error) {
-    toast('Ошибка удаления шкафа: ' + error.message, 'error');
+    toast('Ошибка удаления коробки: ' + error.message, 'error');
   }
 }
 
-document.getElementById('search-inventory').oninput = renderInventoryCabinets;
+document.getElementById('search-inventory').oninput = renderInventoryBoxes;
 
-async function openInventoryCabinet(qrCodeId) {
+async function openInventoryBox(qrCodeId) {
   try {
-    const response = await fetch(`${API}/api/admin/inventory/cabinets/${qrCodeId}`);
+    const response = await fetch(`${API}/api/admin/inventory/boxes/${qrCodeId}`);
     const data = await response.json();
-    if (!response.ok) throw new Error(data.message || 'Не удалось загрузить шкаф');
+    if (!response.ok) throw new Error(data.message || 'Не удалось загрузить коробку');
     inventoryCurrent = data;
     document.getElementById('inventory-qr-id').value = qrCodeId;
     document.getElementById('inventory-qr-code').value = data.qrCode;
     document.getElementById('inventory-title').value = data.title;
-    document.getElementById('inventory-items').value = data.items.map(item => item.name).join('\n');
+    document.getElementById('inventory-items').value = data.items.map(item => `${item.name} | ${Number(item.expectedQuantity) || 1} | ${item.modelType || 'cube'}`).join('\n');
     renderInventoryItemsPreview();
     photosMarkedForRemoval.clear();
-    [1, 2].forEach(page => {
-      document.getElementById(`inventory-photo-${page}`).value = '';
-      const current = (data.photos || []).find(photo => Number(photo.pageNumber) === page);
-      const preview = document.getElementById(`inventory-photo-preview-${page}`);
-      preview.innerHTML = current ? `<img src="${escapeHtml(current.photoUrl)}" alt="Лист ${page} шкафа">` : 'Фото не загружено';
-      document.getElementById(`inventory-photo-hint-${page}`).textContent = current
-        ? `${current.caption || `Лист ${page}`} · выберите файл, чтобы заменить`
-        : page === 1 ? 'Основной вид шкафа' : 'Дополнительный ракурс';
-      const remove = document.getElementById(`inventory-photo-remove-${page}`);
-      remove.hidden = !current;
-      remove.classList.remove('is-selected');
-      remove.textContent = 'Удалить фото';
+    inventoryPhotoDrafts.forEach(draft => {
+      if (draft.previewUrl) URL.revokeObjectURL(draft.previewUrl);
     });
+    inventoryPhotoDrafts = (data.photos || [])
+      .filter(photo => Number(photo.pageNumber) > 0)
+      .map(photo => ({
+        key: nextInventoryPhotoKey++,
+        pageNumber: Number(photo.pageNumber),
+        caption: photo.caption || `Изображение содержимого ${photo.pageNumber}`,
+        photoUrl: photo.photoUrl,
+        previewUrl: '',
+        file: null,
+        isExisting: true
+      }));
+    renderInventoryPhotoInputs();
+    const modelInput = document.getElementById('inventory-model');
+    modelInput.value = '';
+    removeCurrentModel = false;
+    document.getElementById('inventory-model-hint').textContent = data.modelAvailable
+      ? `${data.modelFileName || 'GLB-модель загружена'} · выберите файл для замены`
+      : 'GLB не загружена. В карточке будут показаны тестовые примитивы из перечня.';
+    const modelRemove = document.getElementById('inventory-model-remove');
+    modelRemove.hidden = !data.modelAvailable;
+    modelRemove.classList.remove('is-selected');
+    modelRemove.textContent = 'Удалить 3D-модель';
     document.getElementById('modal-inventory').classList.add('open');
   } catch (error) {
     toast(error.message, 'error');
   }
 }
 
-function toggleRemovePhoto(page) {
-  const button = document.getElementById(`inventory-photo-remove-${page}`);
+function toggleRemovePhoto(page, button) {
   if (photosMarkedForRemoval.has(page)) photosMarkedForRemoval.delete(page);
   else photosMarkedForRemoval.add(page);
   const selected = photosMarkedForRemoval.has(page);
-  button.classList.toggle('is-selected', selected);
-  button.textContent = selected ? 'Фото будет удалено' : 'Удалить фото';
+  if (button) {
+    button.classList.toggle('is-selected', selected);
+    button.textContent = selected ? 'Оставить фото' : 'Удалить фото';
+  }
 }
 
-[1, 2].forEach(page => {
-  document.getElementById(`inventory-photo-${page}`).addEventListener('change', event => {
-    const file = event.target.files[0];
-    if (!file) return;
-    if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) {
-      event.target.value = '';
-      return toast('Выберите JPEG, PNG или WebP', 'error');
-    }
-    if (file.size > 8 * 1024 * 1024) {
-      event.target.value = '';
-      return toast('Фотография должна быть не больше 8 МБ', 'error');
-    }
-    photosMarkedForRemoval.delete(page);
-    const remove = document.getElementById(`inventory-photo-remove-${page}`);
-    remove.classList.remove('is-selected');
-    remove.textContent = 'Удалить фото';
-    document.getElementById(`inventory-photo-preview-${page}`).innerHTML = `<img src="${URL.createObjectURL(file)}" alt="Предпросмотр листа ${page}">`;
-    document.getElementById(`inventory-photo-hint-${page}`).textContent = file.name;
+// Добавляет строку загрузки следующего изображения, не ограничивая их число.
+function addInventoryPhotoInput() {
+  const allPages = [
+    ...(inventoryCurrent?.photos || []).map(photo => Number(photo.pageNumber) || 0),
+    ...inventoryPhotoDrafts.map(draft => draft.pageNumber)
+  ];
+  inventoryPhotoDrafts.push({
+    key: nextInventoryPhotoKey++,
+    pageNumber: Math.max(0, ...allPages) + 1,
+    caption: `Изображение содержимого ${Math.max(0, ...allPages) + 1}`,
+    photoUrl: '',
+    previewUrl: '',
+    file: null,
+    isExisting: false
   });
-});
+  renderInventoryPhotoInputs();
+}
+
+function removeInventoryPhotoInput(key) {
+  const draft = inventoryPhotoDrafts.find(item => item.key === key);
+  if (!draft) return;
+  if (draft.isExisting) {
+    toggleRemovePhoto(draft.pageNumber, document.querySelector(`[data-photo-remove="${key}"]`));
+  } else {
+    if (draft.previewUrl) URL.revokeObjectURL(draft.previewUrl);
+    inventoryPhotoDrafts = inventoryPhotoDrafts.filter(item => item.key !== key);
+  }
+  renderInventoryPhotoInputs();
+}
+
+function renderInventoryPhotoInputs() {
+  const list = document.getElementById('inventory-photo-list');
+  list.innerHTML = inventoryPhotoDrafts.map(draft => {
+    const markedForRemoval = photosMarkedForRemoval.has(draft.pageNumber);
+    const preview = draft.previewUrl || draft.photoUrl;
+    return `<article class="photo-upload-card">
+      <strong>Изображение ${draft.pageNumber}</strong>
+      <div class="photo-preview">${preview ? `<img src="${escapeHtml(preview)}" alt="Изображение содержимого ${draft.pageNumber}">` : 'Фото не загружено'}</div>
+      <input type="file" accept="image/jpeg,image/png,image/webp" data-photo-input="${draft.key}">
+      <div class="hint">${escapeHtml(draft.file?.name || draft.caption || 'Выберите изображение')}</div>
+      <button type="button" class="btn btn-secondary btn-sm photo-remove ${markedForRemoval ? 'is-selected' : ''}" data-photo-remove="${draft.key}">${draft.isExisting ? (markedForRemoval ? 'Оставить фото' : 'Удалить фото') : 'Убрать строку'}</button>
+    </article>`;
+  }).join('');
+
+  list.querySelectorAll('[data-photo-input]').forEach(input => {
+    input.addEventListener('change', event => selectInventoryPhoto(Number(event.target.dataset.photoInput), event));
+  });
+  list.querySelectorAll('[data-photo-remove]').forEach(button => {
+    button.addEventListener('click', () => removeInventoryPhotoInput(Number(button.dataset.photoRemove)));
+  });
+}
+
+function selectInventoryPhoto(key, event) {
+  const draft = inventoryPhotoDrafts.find(item => item.key === key);
+  const file = event.target.files[0];
+  if (!draft || !file) return;
+  if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) {
+    event.target.value = '';
+    return toast('Выберите JPEG, PNG или WebP', 'error');
+  }
+  if (file.size > 8 * 1024 * 1024) {
+    event.target.value = '';
+    return toast('Фотография должна быть не больше 8 МБ', 'error');
+  }
+  if (draft.previewUrl) URL.revokeObjectURL(draft.previewUrl);
+  draft.file = file;
+  draft.previewUrl = URL.createObjectURL(file);
+  photosMarkedForRemoval.delete(draft.pageNumber);
+  renderInventoryPhotoInputs();
+}
+
+function toggleRemoveModel() {
+  removeCurrentModel = !removeCurrentModel;
+  const button = document.getElementById('inventory-model-remove');
+  button.classList.toggle('is-selected', removeCurrentModel);
+  button.textContent = removeCurrentModel ? 'Модель будет удалена' : 'Удалить 3D-модель';
+}
 
 function readImageAsBase64(file) {
   return new Promise((resolve, reject) => {
@@ -707,46 +872,122 @@ function readImageAsBase64(file) {
   });
 }
 
-async function saveInventoryCabinet() {
+function readFileAsBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result).split(',')[1]);
+    reader.onerror = () => reject(new Error('Не удалось прочитать GLB-модель'));
+    reader.readAsDataURL(file);
+  });
+}
+
+async function saveInventoryBox() {
   const qrCodeId = document.getElementById('inventory-qr-id').value;
   const title = document.getElementById('inventory-title').value.trim();
-  const names = document.getElementById('inventory-items').value
-    .split(/\r?\n/).map(name => name.trim()).filter(Boolean);
-  if (!title) return toast('Укажите название шкафа', 'error');
-  if (!names.length) return toast('Добавьте хотя бы один предмет', 'error');
-  if (new Set(names.map(name => name.toLocaleLowerCase('ru-RU'))).size !== names.length)
-    return toast('Удалите повторяющиеся названия предметов', 'error');
+  const items = parseInventoryItemLines(document.getElementById('inventory-items').value);
+  if (!title) return toast('Укажите название коробки', 'error');
+  if (!items.length) return toast('Добавьте хотя бы одну позицию', 'error');
+  if (items.some(item => !item.name || item.expectedQuantity < 1))
+    return toast('Для каждой позиции укажите название и целое количество больше нуля', 'error');
+  if (new Set(items.map(item => item.name.toLocaleLowerCase('ru-RU'))).size !== items.length)
+    return toast('Удалите повторяющиеся названия позиций', 'error');
 
-  const previous = new Map((inventoryCurrent?.items || []).map(item => [item.name.toLocaleLowerCase('ru-RU'), item.id]));
+  const previous = new Map((inventoryCurrent?.items || []).map(item => [item.name.toLocaleLowerCase('ru-RU'), item]));
   const body = {
     title,
     photos: [],
     removePhotoPages: Array.from(photosMarkedForRemoval),
-    items: names.map((name, index) => ({
-      id: previous.get(name.toLocaleLowerCase('ru-RU')) || 0,
-      name,
+    removeModel: removeCurrentModel,
+    items: items.map((item, index) => ({
+      id: previous.get(item.name.toLocaleLowerCase('ru-RU'))?.id || 0,
+      name: item.name,
+      expectedQuantity: item.expectedQuantity,
+      modelType: item.modelType || previous.get(item.name.toLocaleLowerCase('ru-RU'))?.modelType || 'cube',
       sortOrder: (index + 1) * 10
     }))
   };
-  for (const pageNumber of [1, 2]) {
-    const photo = document.getElementById(`inventory-photo-${pageNumber}`).files[0];
-    if (!photo) continue;
+  for (const draft of inventoryPhotoDrafts) {
+    if (!draft.file) continue;
     try {
-      body.photos.push({ pageNumber, caption: `Лист ${pageNumber}`, contentType: photo.type, imageBase64: await readImageAsBase64(photo) });
+      body.photos.push({ pageNumber: draft.pageNumber, caption: draft.caption, contentType: draft.file.type, imageBase64: await readImageAsBase64(draft.file) });
     } catch (error) { return toast(error.message, 'error'); }
   }
 
   try {
-    const response = await fetch(`${API}/api/admin/inventory/cabinets/${qrCodeId}`, {
+    const modelFile = document.getElementById('inventory-model').files[0];
+    if (modelFile) {
+      if (!modelFile.name.toLocaleLowerCase().endsWith('.glb')) return toast('Выберите файл в формате GLB', 'error');
+      if (modelFile.size === 0 || modelFile.size > 20 * 1024 * 1024) return toast('Размер GLB должен быть от 1 байта до 20 МБ', 'error');
+      try {
+        body.modelBase64 = await readFileAsBase64(modelFile);
+        body.modelFileName = modelFile.name;
+        body.removeModel = false;
+      } catch (error) { return toast(error.message, 'error'); }
+    }
+
+    const response = await fetch(`${API}/api/admin/inventory/boxes/${qrCodeId}`, {
       method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
     });
     const data = await response.json();
-    if (!response.ok) return toast(data.message || 'Не удалось сохранить шкаф', 'error');
-    toast(data.message || 'Данные шкафа сохранены');
+    if (!response.ok) return toast(data.message || 'Не удалось сохранить коробку', 'error');
+    toast(data.message || 'Данные коробки сохранены');
     closeModal('modal-inventory');
-    await loadInventoryCabinets();
+    await loadInventoryBoxes();
   } catch (error) {
     toast('Ошибка сети: ' + error.message, 'error');
+  }
+}
+
+document.getElementById('inventory-model').addEventListener('change', event => {
+  const file = event.target.files[0];
+  if (!file) return;
+  removeCurrentModel = false;
+  document.getElementById('inventory-model-remove').classList.remove('is-selected');
+  document.getElementById('inventory-model-remove').textContent = 'Удалить 3D-модель';
+  document.getElementById('inventory-model-hint').textContent = `${file.name} · ${Math.ceil(file.size / 1024)} КБ · будет загружена при сохранении`;
+});
+
+// Назначение выбранного списка коробок конкретному сотруднику.
+async function openInventoryAssignment() {
+  await loadInventoryBoxes();
+  const activeUsers = usersData.filter(user => user.isActive);
+  if (!activeUsers.length) return toast('Нет активных сотрудников для назначения.', 'error');
+  const usersSelect = document.getElementById('assignment-user');
+  usersSelect.innerHTML = activeUsers.map(user => `<option value="${Number(user.id)}">${escapeHtml(user.fullName)} · ${escapeHtml(user.department || 'Без отдела')}</option>`).join('');
+  const configuredBoxes = inventoryBoxes.filter(box => box.isActive && box.boxId && Number(box.itemCount) > 0);
+  const list = document.getElementById('assignment-boxes');
+  list.innerHTML = configuredBoxes.map(box => `
+    <label class="assignment-box-option"><input type="checkbox" value="${Number(box.qrCodeId)}" onchange="updateAssignmentCount()">
+      <span><strong>${escapeHtml(box.title || box.objectName)}</strong><small><code>${escapeHtml(box.qrCode)}</code> · ${Number(box.itemCount)} поз.</small></span>
+    </label>`).join('') || '<p class="empty">Нет активных настроенных коробок. Сначала создайте коробки и добавьте позиции.</p>';
+  updateAssignmentCount();
+  document.getElementById('modal-inventory-assignment').classList.add('open');
+}
+
+function updateAssignmentCount() {
+  const count = document.querySelectorAll('#assignment-boxes input[type="checkbox"]:checked').length;
+  document.getElementById('assignment-count').textContent = `Выбрано коробок: ${count}`;
+}
+
+async function createInventoryAssignment() {
+  const userId = Number(document.getElementById('assignment-user').value);
+  const qrCodeIds = Array.from(document.querySelectorAll('#assignment-boxes input[type="checkbox"]:checked'))
+    .map(input => Number(input.value));
+  if (!userId) return toast('Выберите сотрудника.', 'error');
+  if (qrCodeIds.length === 0) return toast('Выберите хотя бы одну коробку.', 'error');
+
+  try {
+    const response = await fetch(`${API}/api/admin/inventory/assignments`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userId, qrCodeIds })
+    });
+    const data = await response.json();
+    if (!response.ok) return toast(data.message || 'Не удалось назначить инвентаризацию', 'error');
+    closeModal('modal-inventory-assignment');
+    toast(data.message || 'Инвентаризация назначена сотруднику');
+    await loadInventoryBatches();
+  } catch (error) {
+    toast('Ошибка назначения: ' + error.message, 'error');
   }
 }
 

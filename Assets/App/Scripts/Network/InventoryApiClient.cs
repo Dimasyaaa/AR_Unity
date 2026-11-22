@@ -8,24 +8,26 @@ using UnityEngine.Networking;
 
 namespace ArInventory.Network
 {
-    /// <summary>Данные шкафа, полученные от API.</summary>
+    /// <summary>Данные коробки, полученные от REST API.</summary>
     [Serializable]
-    public sealed class InventoryCabinetResponse
+    public sealed class InventoryBoxResponse
     {
         public bool success;
-        public long cabinetId;
+        public long boxId;
         public long qrCodeId;
         public string qrCode;
         public string title;
         public bool photoAvailable;
         public string photoUrl;
-        public InventoryCabinetPhoto[] photos;
-        public InventoryCabinetItem[] items;
+        public bool modelAvailable;
+        public string modelUrl;
+        public InventoryBoxPhoto[] photos;
+        public InventoryBoxItem[] items;
     }
 
-    /// <summary>Описание одной фотографии или листа шкафа из ответа API.</summary>
+    /// <summary>Изображение содержимого коробки из ответа API.</summary>
     [Serializable]
-    public sealed class InventoryCabinetPhoto
+    public sealed class InventoryBoxPhoto
     {
         public int pageNumber;
         public string caption;
@@ -33,19 +35,61 @@ namespace ArInventory.Network
         public string photoUrl;
     }
 
-    /// <summary>Пункт чек-листа шкафа из ответа API.</summary>
+    /// <summary>Позиция чек-листа коробки и тип её тестовой 3D-фигуры.</summary>
     [Serializable]
-    public sealed class InventoryCabinetItem
+    public sealed class InventoryBoxItem
     {
         public long id;
         public string name;
         public string description;
         public int sortOrder;
+        public int expectedQuantity;
+        public string modelType;
+    }
+
+    /// <summary>Коробка, которую сотруднику разрешено проверить в текущем запуске.</summary>
+    [Serializable]
+    public sealed class InventoryAssignedBox
+    {
+        public long qrCodeId;
+        public string qrCode;
+        public string title;
+    }
+
+    /// <summary>Назначенное сервером задание на инвентаризацию выбранных коробок.</summary>
+    [Serializable]
+    public sealed class InventoryAssignmentResponse
+    {
+        public bool success;
+        public string clientBatchId;
+        public int expectedBoxCount;
+        public string status;
+        public InventoryAssignedBox[] boxes;
+    }
+
+    /// <summary>Сводные данные для экрана, где сотрудник выбирает назначение.</summary>
+    [Serializable]
+    public sealed class InventoryAssignmentOverviewResponse
+    {
+        public InventoryAssignmentResponse activeAssignment;
+        public InventoryAssignmentHistory[] history;
+    }
+
+    /// <summary>Короткая строка истории общей инвентаризации сотрудника.</summary>
+    [Serializable]
+    public sealed class InventoryAssignmentHistory
+    {
+        public string clientBatchId;
+        public int expectedBoxCount;
+        public int completedBoxCount;
+        public string status;
+        public string startedAt;
+        public string completedAt;
     }
 
     /// <summary>
     /// Общая точка связи приложения с сервером инвентаризации.
-    /// Загружает шкаф и его фотографии, а также отправляет результат проверки.
+    /// Загружает содержимое коробки и его изображения, а также отправляет результат проверки.
     /// </summary>
     public static class InventoryApiClient
     {
@@ -67,7 +111,7 @@ namespace ArInventory.Network
 
                     // Сохранённая настройка переживает обновление приложения. Если USB-туннель
                     // уже отключён, loopback-адрес указывает на сам телефон, поэтому обычные
-                    // запросы к шкафам переключаем на Wi-Fi. USB остаётся доступен для синхронизации.
+                    // Запросы содержимого коробок переключаем на Wi-Fi. USB остаётся доступен для синхронизации.
                     resolved = Application.platform == RuntimePlatform.Android && IsLoopback(saved)
                         ? SyncManager.WIFI_URL
                         : saved;
@@ -87,18 +131,39 @@ namespace ArInventory.Network
             }
         }
 
-        /// <summary>Запрашивает состав шкафа и передаёт распознанный ответ вызывающему компоненту.</summary>
-        public static void GetCabinet(MonoBehaviour runner, string qrCode,
-            Action<InventoryCabinetResponse> onSuccess, Action<string> onError)
+        /// <summary>Получает из API карточку коробки по тексту её QR-кода.</summary>
+        public static void GetBox(MonoBehaviour runner, string qrCode,
+            Action<InventoryBoxResponse> onSuccess, Action<string> onError)
         {
-            runner.StartCoroutine(GetCabinetRoutine(qrCode, onSuccess, onError));
+            runner.StartCoroutine(GetBoxRoutine(qrCode, onSuccess, onError));
         }
 
-        /// <summary>Загружает изображение заданного листа шкафа.</summary>
-        public static void GetPhoto(MonoBehaviour runner, string qrCode, int pageNumber,
+        /// <summary>Загружает изображение содержимого коробки.</summary>
+        public static void GetBoxPhoto(MonoBehaviour runner, string qrCode, int pageNumber,
             Action<Texture2D> onSuccess, Action<string> onError)
         {
-            runner.StartCoroutine(GetPhotoRoutine(qrCode, pageNumber, onSuccess, onError));
+            runner.StartCoroutine(GetBoxPhotoRoutine(qrCode, pageNumber, onSuccess, onError));
+        }
+
+        /// <summary>Скачивает GLB-модель коробки, если она загружена в админ-панели.</summary>
+        public static void GetBoxModel(MonoBehaviour runner, string qrCode,
+            Action<byte[]> onSuccess, Action<string> onError)
+        {
+            runner.StartCoroutine(GetBoxModelRoutine(qrCode, onSuccess, onError));
+        }
+
+        /// <summary>Запрашивает назначенное администратором задание конкретного сотрудника.</summary>
+        public static void GetActiveAssignment(MonoBehaviour runner, long userId,
+            Action<InventoryAssignmentResponse> onSuccess, Action<string> onError)
+        {
+            runner.StartCoroutine(GetActiveAssignmentRoutine(userId, onSuccess, onError));
+        }
+
+        /// <summary>Загружает активное назначение и историю завершённых инвентаризаций.</summary>
+        public static void GetAssignmentOverview(MonoBehaviour runner, long userId,
+            Action<InventoryAssignmentOverviewResponse> onSuccess, Action<string> onError)
+        {
+            runner.StartCoroutine(GetAssignmentOverviewRoutine(userId, onSuccess, onError));
         }
 
         /// <summary>Отправляет завершённую инвентаризацию на сервер.</summary>
@@ -116,11 +181,11 @@ namespace ArInventory.Network
             PlayerPrefs.Save();
         }
 
-        /// <summary>Выполняет HTTP-запрос состава шкафа и проверяет ответ сервера.</summary>
-        private static IEnumerator GetCabinetRoutine(string qrCode,
-            Action<InventoryCabinetResponse> onSuccess, Action<string> onError)
+        /// <summary>Выполняет HTTP-запрос содержимого коробки и проверяет ответ сервера.</summary>
+        private static IEnumerator GetBoxRoutine(string qrCode,
+            Action<InventoryBoxResponse> onSuccess, Action<string> onError)
         {
-            string url = $"{BaseUrl}/api/inventory/cabinets?qrCode={UnityWebRequest.EscapeURL(qrCode)}";
+            string url = $"{BaseUrl}/api/inventory/boxes?qrCode={UnityWebRequest.EscapeURL(qrCode)}";
             using (var request = UnityWebRequest.Get(url))
             {
                 request.timeout = 10;
@@ -128,18 +193,18 @@ namespace ArInventory.Network
                 if (request.result != UnityWebRequest.Result.Success)
                 { onError?.Invoke(ReadableError(request)); yield break; }
 
-                var response = JsonUtility.FromJson<InventoryCabinetResponse>(request.downloadHandler.text);
+                var response = JsonUtility.FromJson<InventoryBoxResponse>(request.downloadHandler.text);
                 if (response == null || !response.success)
-                { onError?.Invoke("Сервер вернул некорректные данные шкафа."); yield break; }
+                { onError?.Invoke("Сервер вернул некорректные данные коробки."); yield break; }
                 onSuccess?.Invoke(response);
             }
         }
 
         /// <summary>Выполняет HTTP-запрос фотографии и преобразует ответ в текстуру Unity.</summary>
-        private static IEnumerator GetPhotoRoutine(string qrCode, int pageNumber,
+        private static IEnumerator GetBoxPhotoRoutine(string qrCode, int pageNumber,
             Action<Texture2D> onSuccess, Action<string> onError)
         {
-            string url = $"{BaseUrl}/api/inventory/cabinet-photo?qrCode={UnityWebRequest.EscapeURL(qrCode)}&pageNumber={Mathf.Clamp(pageNumber, 1, 2)}";
+            string url = $"{BaseUrl}/api/inventory/box-photo?qrCode={UnityWebRequest.EscapeURL(qrCode)}&pageNumber={Mathf.Max(1, pageNumber)}";
             using (var request = UnityWebRequestTexture.GetTexture(url, true))
             {
                 request.timeout = 15;
@@ -147,6 +212,60 @@ namespace ArInventory.Network
                 if (request.result != UnityWebRequest.Result.Success)
                 { onError?.Invoke(ReadableError(request)); yield break; }
                 onSuccess?.Invoke(DownloadHandlerTexture.GetContent(request));
+            }
+        }
+
+        private static IEnumerator GetBoxModelRoutine(string qrCode,
+            Action<byte[]> onSuccess, Action<string> onError)
+        {
+            string url = $"{BaseUrl}/api/inventory/box-model?qrCode={UnityWebRequest.EscapeURL(qrCode)}";
+            using (var request = UnityWebRequest.Get(url))
+            {
+                request.timeout = 30;
+                yield return request.SendWebRequest();
+                if (request.result != UnityWebRequest.Result.Success)
+                { onError?.Invoke(ReadableError(request)); yield break; }
+                onSuccess?.Invoke(request.downloadHandler.data);
+            }
+        }
+
+        private static IEnumerator GetActiveAssignmentRoutine(long userId,
+            Action<InventoryAssignmentResponse> onSuccess, Action<string> onError)
+        {
+            string url = $"{BaseUrl}/api/inventory/assignments/{userId}/active";
+            using (var request = UnityWebRequest.Get(url))
+            {
+                request.timeout = 10;
+                yield return request.SendWebRequest();
+                if (request.result != UnityWebRequest.Result.Success)
+                { onError?.Invoke(ReadableError(request)); yield break; }
+
+                var response = JsonUtility.FromJson<InventoryAssignmentResponse>(request.downloadHandler.text);
+                if (response == null || !response.success || response.boxes == null || response.boxes.Length == 0)
+                { onError?.Invoke("Сервер вернул некорректное назначение коробок."); yield break; }
+                onSuccess?.Invoke(response);
+            }
+        }
+
+        private static IEnumerator GetAssignmentOverviewRoutine(long userId,
+            Action<InventoryAssignmentOverviewResponse> onSuccess, Action<string> onError)
+        {
+            string url = $"{BaseUrl}/api/inventory/assignments/{userId}/overview";
+            using (var request = UnityWebRequest.Get(url))
+            {
+                request.timeout = 10;
+                yield return request.SendWebRequest();
+                if (request.result != UnityWebRequest.Result.Success)
+                { onError?.Invoke(ReadableError(request)); yield break; }
+
+                var response = JsonUtility.FromJson<InventoryAssignmentOverviewResponse>(request.downloadHandler.text);
+                if (response == null)
+                { onError?.Invoke("Сервер вернул некорректный список инвентаризаций."); yield break; }
+                response.history ??= Array.Empty<InventoryAssignmentHistory>();
+                if (response.activeAssignment != null &&
+                    (response.activeAssignment.boxes == null || response.activeAssignment.boxes.Length == 0))
+                { onError?.Invoke("В назначении не найдено ни одной коробки."); yield break; }
+                onSuccess?.Invoke(response);
             }
         }
 

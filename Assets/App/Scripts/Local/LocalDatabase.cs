@@ -131,16 +131,38 @@ namespace ArInventory.Local
         {
             bool hasCabinetTables;
             bool hasCabinetPhotoTable;
+            bool hasBoxModelTable;
+            bool hasAssignmentTable;
+            bool hasQuantityFields;
+            List<LocalBoxModel> exportedModels;
+            List<LocalInventoryBatch> exportedAssignments;
             using (var source = new SQLiteConnection(sourcePath))
             {
                 hasCabinetTables = source.GetTableInfo("cabinet_profiles").Count > 0 &&
                                    source.GetTableInfo("cabinet_checklist_items").Count > 0;
                 hasCabinetPhotoTable = source.GetTableInfo("cabinet_photos").Count > 0;
+                hasBoxModelTable = source.GetTableInfo("box_models").Count > 0;
+                hasAssignmentTable = source.GetTableInfo("local_inventory_batches").Count > 0;
+                exportedModels = hasBoxModelTable
+                    ? source.Table<LocalBoxModel>().ToList()
+                    : new List<LocalBoxModel>();
+                exportedAssignments = hasAssignmentTable
+                    ? source.Table<LocalInventoryBatch>().ToList()
+                    : new List<LocalInventoryBatch>();
+                var sourceItems = source.GetTableInfo("cabinet_checklist_items");
+                hasQuantityFields = sourceItems.Any(column => column.Name == "expected_quantity") &&
+                                    sourceItems.Any(column => column.Name == "model_type");
             }
 
             using (var conn = new SQLiteConnection(databasePath))
             {
                 conn.CreateTable<LocalCabinetPhoto>();
+                conn.CreateTable<LocalCabinetChecklistItem>();
+                conn.CreateTable<LocalBoxModel>();
+                conn.CreateTable<LocalInventoryBatch>();
+                EnsureColumn(conn, "cabinet_checklist_items", "expected_quantity", "INTEGER NOT NULL DEFAULT 1");
+                EnsureColumn(conn, "cabinet_checklist_items", "model_type", "TEXT NOT NULL DEFAULT 'cube'");
+                EnsureColumn(conn, "local_inventory_batches", "assigned_qr_codes", "TEXT NOT NULL DEFAULT ''");
                 conn.Execute("ATTACH DATABASE ? AS newdb", sourcePath);
                 conn.RunInTransaction(() =>
                 {
@@ -151,13 +173,67 @@ namespace ArInventory.Local
                         conn.Execute("DELETE FROM cabinet_checklist_items");
                         conn.Execute("DELETE FROM cabinet_profiles");
                         conn.Execute("INSERT INTO cabinet_profiles SELECT * FROM newdb.cabinet_profiles");
-                        conn.Execute("INSERT INTO cabinet_checklist_items SELECT * FROM newdb.cabinet_checklist_items");
+                        if (hasQuantityFields)
+                        {
+                            conn.Execute(@"INSERT INTO cabinet_checklist_items
+                                (id, cabinet_id, item_name, description, sort_order, is_active, expected_quantity, model_type)
+                                SELECT id, cabinet_id, item_name, description, sort_order, is_active, expected_quantity, model_type
+                                FROM newdb.cabinet_checklist_items");
+                        }
+                        else
+                        {
+                            conn.Execute(@"INSERT INTO cabinet_checklist_items
+                                (id, cabinet_id, item_name, description, sort_order, is_active, expected_quantity, model_type)
+                                SELECT id, cabinet_id, item_name, description, sort_order, is_active, 1, 'cube'
+                                FROM newdb.cabinet_checklist_items");
+                        }
                     }
                     conn.Execute("DELETE FROM cabinet_photos");
                     if (hasCabinetPhotoTable)
                         conn.Execute("INSERT INTO cabinet_photos SELECT * FROM newdb.cabinet_photos");
                     conn.Execute("DELETE FROM qr_codes");
                     conn.Execute("INSERT INTO qr_codes SELECT * FROM newdb.qr_codes");
+
+                    if (hasBoxModelTable)
+                    {
+                        conn.Execute("DELETE FROM box_models");
+                        foreach (LocalBoxModel model in exportedModels)
+                        {
+                            model.id = 0;
+                            conn.Insert(model);
+                        }
+                    }
+
+                    // Обновляем назначения из экспорта, но не сбрасываем локально завершённые проверки.
+                    foreach (LocalInventoryBatch assignment in exportedAssignments)
+                    {
+                        if (string.IsNullOrWhiteSpace(assignment.client_batch_id) ||
+                            string.IsNullOrWhiteSpace(assignment.assigned_qr_codes))
+                            continue;
+
+                        LocalInventoryBatch cached = conn.Table<LocalInventoryBatch>()
+                            .ToList()
+                            .FirstOrDefault(item => item.client_batch_id == assignment.client_batch_id);
+                        if (cached != null && cached.status == "completed")
+                            continue;
+
+                        if (cached == null)
+                        {
+                            assignment.id = 0;
+                            assignment.status = "in_progress";
+                            conn.Insert(assignment);
+                            continue;
+                        }
+
+                        cached.user_id = assignment.user_id;
+                        cached.expected_box_count = assignment.expected_box_count;
+                        cached.assigned_qr_codes = assignment.assigned_qr_codes;
+                        cached.started_at = string.IsNullOrWhiteSpace(cached.started_at)
+                            ? assignment.started_at
+                            : cached.started_at;
+                        cached.status = "in_progress";
+                        conn.Update(cached);
+                    }
                 });
                 conn.Execute("DETACH DATABASE newdb");
             }
@@ -194,6 +270,19 @@ namespace ArInventory.Local
             db.CreateTable<LocalCabinetChecklistItem>();
             db.CreateTable<LocalInventoryRun>();
             db.CreateTable<LocalInventoryRunItem>();
+            db.CreateTable<LocalInventoryBatch>();
+            db.CreateTable<LocalBoxModel>();
+            EnsureColumn(db, "local_inventory_batches", "assigned_qr_codes", "TEXT NOT NULL DEFAULT ''");
+            EnsureColumn(db, "cabinet_checklist_items", "expected_quantity", "INTEGER NOT NULL DEFAULT 1");
+            EnsureColumn(db, "cabinet_checklist_items", "model_type", "TEXT NOT NULL DEFAULT 'cube'");
+            EnsureColumn(db, "local_inventory_run_items", "expected_quantity", "INTEGER NOT NULL DEFAULT 1");
+            EnsureColumn(db, "local_inventory_run_items", "actual_quantity", "INTEGER NOT NULL DEFAULT 0");
+            EnsureColumn(db, "local_inventory_runs", "box_title", "TEXT NOT NULL DEFAULT ''");
+            EnsureColumn(db, "local_inventory_runs", "client_batch_id", "TEXT NOT NULL DEFAULT ''");
+            EnsureColumn(db, "local_inventory_runs", "expected_box_count", "INTEGER NOT NULL DEFAULT 0");
+            db.Execute(@"UPDATE local_inventory_run_items
+                SET actual_quantity = CASE WHEN status = 'present' THEN expected_quantity ELSE 0 END
+                WHERE actual_quantity = 0 AND status = 'present'");
             try { db.Execute("ALTER TABLE inventory_sessions ADD COLUMN synced INTEGER NOT NULL DEFAULT 0"); }
             catch { /* колонка уже есть — игнорируем */ }
 
@@ -208,6 +297,234 @@ namespace ArInventory.Local
 
             Debug.Log($"[DB] Ready. Users: {usersCount}, QR: {qrCount}, cabinets: {cabinetCount}, checklist items: {checklistCount}");
             OnDatabaseReady?.Invoke();
+        }
+
+        /// <summary>Добавляет колонку в старую локальную базу, только если её там ещё нет.</summary>
+        private static void EnsureColumn(SQLiteConnection connection, string tableName,
+            string columnName, string columnDefinition)
+        {
+            if (connection.GetTableInfo(tableName).Any(column => column.Name == columnName))
+                return;
+
+            connection.Execute($"ALTER TABLE {tableName} ADD COLUMN {columnName} {columnDefinition}");
+        }
+
+        /// <summary>Кэширует назначение сервера, чтобы сотрудник мог продолжить работу без сети.</summary>
+        public LocalInventoryBatch SaveAssignedInventoryBatch(string clientBatchId, long userId,
+            IReadOnlyList<string> assignedQrCodes)
+        {
+            if (!IsReady || userId <= 0 || string.IsNullOrWhiteSpace(clientBatchId))
+                return null;
+
+            var normalizedCodes = assignedQrCodes?
+                .Where(code => !string.IsNullOrWhiteSpace(code))
+                .Select(GetQrIdentity)
+                .Distinct(System.StringComparer.OrdinalIgnoreCase)
+                .ToList() ?? new List<string>();
+            if (normalizedCodes.Count == 0)
+                return null;
+
+            var existing = db.Table<LocalInventoryBatch>()
+                .ToList()
+                .FirstOrDefault(batch => batch.client_batch_id == clientBatchId);
+
+            // Предыдущее назначение сохраняет свои отчёты, но перестаёт быть активным.
+            foreach (var previous in db.Table<LocalInventoryBatch>().ToList()
+                         .Where(batch => batch.user_id == userId && batch.status == "in_progress" &&
+                                         batch.client_batch_id != clientBatchId))
+            {
+                previous.status = "cancelled";
+                db.Update(previous);
+            }
+
+            var batch = existing ?? new LocalInventoryBatch();
+            bool wasCompleted = batch.status == "completed";
+            batch.client_batch_id = clientBatchId;
+            batch.user_id = userId;
+            // Число коробок берём из фактического списка QR-кодов администратора.
+            batch.expected_box_count = normalizedCodes.Count;
+            batch.assigned_qr_codes = string.Join("|", normalizedCodes);
+            if (string.IsNullOrWhiteSpace(batch.started_at))
+                batch.started_at = System.DateTime.UtcNow.ToString("o");
+            batch.status = wasCompleted ? "completed" : "in_progress";
+            if (existing == null)
+                db.Insert(batch);
+            else
+                db.Update(batch);
+
+            if (!wasCompleted && GetCompletedBoxCount(clientBatchId) >= batch.expected_box_count)
+            {
+                batch.status = "completed";
+                batch.completed_at = System.DateTime.UtcNow.ToString("o");
+                db.Update(batch);
+            }
+            return batch;
+        }
+
+        /// <summary>Сохраняет обновлённый статус назначенного запуска.</summary>
+        public void UpdateInventoryBatch(LocalInventoryBatch batch)
+        {
+            if (!IsReady || batch == null) return;
+            db.Update(batch);
+        }
+
+        /// <summary>Проверяет, что отсканированная коробка входит в назначенный список QR-кодов.</summary>
+        public bool IsQrAssignedToBatch(string clientBatchId, string scannedQrCode)
+        {
+            if (!IsReady || string.IsNullOrWhiteSpace(clientBatchId) || string.IsNullOrWhiteSpace(scannedQrCode))
+                return false;
+            var batch = db.Table<LocalInventoryBatch>().ToList()
+                .FirstOrDefault(item => item.client_batch_id == clientBatchId);
+            if (batch == null || string.IsNullOrWhiteSpace(batch.assigned_qr_codes))
+                return false;
+
+            string identity = GetQrIdentity(scannedQrCode);
+            return batch.assigned_qr_codes.Split('|')
+                .Any(code => System.String.Equals(code, identity, System.StringComparison.OrdinalIgnoreCase));
+        }
+
+        /// <summary>Возвращает активную общую проверку сотрудника или начинает новую.</summary>
+        public LocalInventoryBatch GetOrStartInventoryBatch(long userId, int expectedBoxCount)
+        {
+            if (!IsReady || userId <= 0)
+                return null;
+
+            int safeCount = System.Math.Max(1, expectedBoxCount);
+            LocalInventoryBatch active = db.Table<LocalInventoryBatch>()
+                .ToList()
+                .FirstOrDefault(batch => batch.user_id == userId && batch.status == "in_progress");
+
+            if (active != null)
+            {
+                int completed = GetCompletedBoxCount(active.client_batch_id);
+                if (completed < active.expected_box_count)
+                    return active;
+
+                active.status = "completed";
+                active.completed_at = System.DateTime.UtcNow.ToString("o");
+                db.Update(active);
+            }
+
+            var batch = new LocalInventoryBatch
+            {
+                client_batch_id = System.Guid.NewGuid().ToString("D"),
+                user_id = userId,
+                expected_box_count = safeCount,
+                started_at = System.DateTime.UtcNow.ToString("o"),
+                status = "in_progress"
+            };
+            db.Insert(batch);
+            return batch;
+        }
+
+        /// <summary>Возвращает незавершённый запуск сотрудника, если он есть.</summary>
+        public LocalInventoryBatch GetActiveInventoryBatch(long userId)
+        {
+            if (!IsReady || userId <= 0)
+                return null;
+
+            return db.Table<LocalInventoryBatch>()
+                .ToList()
+                .FirstOrDefault(batch => batch.user_id == userId && batch.status == "in_progress");
+        }
+
+        /// <summary>Возвращает последний запуск сотрудника для итогового экрана.</summary>
+        public LocalInventoryBatch GetLatestInventoryBatch(long userId)
+        {
+            if (!IsReady || userId <= 0)
+                return null;
+
+            return db.Table<LocalInventoryBatch>()
+                .ToList()
+                .Where(batch => batch.user_id == userId)
+                .OrderByDescending(batch => batch.started_at)
+                .FirstOrDefault();
+        }
+
+        /// <summary>Возвращает последние завершённые проверки, сохранённые на этом устройстве.</summary>
+        public List<LocalInventoryBatch> GetCompletedInventoryBatches(long userId, int limit)
+        {
+            if (!IsReady || userId <= 0 || limit <= 0)
+                return new List<LocalInventoryBatch>();
+
+            return db.Table<LocalInventoryBatch>()
+                .ToList()
+                .Where(batch => batch.user_id == userId && batch.status == "completed")
+                .OrderByDescending(batch => string.IsNullOrWhiteSpace(batch.completed_at)
+                    ? batch.started_at
+                    : batch.completed_at)
+                .Take(limit)
+                .ToList();
+        }
+
+        /// <summary>Считает уникальные коробки, для которых в этом запуске сохранён отчёт.</summary>
+        public int GetCompletedBoxCount(string clientBatchId)
+        {
+            if (!IsReady || string.IsNullOrWhiteSpace(clientBatchId))
+                return 0;
+
+            return db.Table<LocalInventoryRun>()
+                .ToList()
+                .Where(run => run.client_batch_id == clientBatchId)
+                .Select(run => GetQrIdentity(run.qr_code))
+                .Where(code => !string.IsNullOrWhiteSpace(code))
+                .Distinct(System.StringComparer.OrdinalIgnoreCase)
+                .Count();
+        }
+
+        /// <summary>Проверяет, не завершал ли сотрудник эту коробку в текущем запуске.</summary>
+        public bool HasCompletedBox(string clientBatchId, string qrCode)
+        {
+            if (!IsReady || string.IsNullOrWhiteSpace(clientBatchId) || string.IsNullOrWhiteSpace(qrCode))
+                return false;
+
+            string identity = GetQrIdentity(qrCode);
+            return db.Table<LocalInventoryRun>()
+                .ToList()
+                .Any(run => run.client_batch_id == clientBatchId &&
+                    System.String.Equals(GetQrIdentity(run.qr_code), identity,
+                        System.StringComparison.OrdinalIgnoreCase));
+        }
+
+        /// <summary>Собирает сводные строки общей проверки из локально сохранённых отчётов.</summary>
+        public List<LocalInventoryBatchSummaryRow> GetInventoryBatchSummary(string clientBatchId)
+        {
+            var result = new List<LocalInventoryBatchSummaryRow>();
+            if (!IsReady || string.IsNullOrWhiteSpace(clientBatchId))
+                return result;
+
+            var runs = db.Table<LocalInventoryRun>()
+                .ToList()
+                .Where(run => run.client_batch_id == clientBatchId)
+                .OrderBy(run => run.completed_at)
+                .ToList();
+            var allItems = db.Table<LocalInventoryRunItem>().ToList();
+
+            foreach (var run in runs)
+            {
+                foreach (var item in allItems.Where(item => item.run_id == run.id).OrderBy(item => item.id))
+                {
+                    string status = item.actual_quantity <= 0 ? "Нет"
+                        : item.actual_quantity < item.expected_quantity ? "Частично" : "Есть";
+                    result.Add(new LocalInventoryBatchSummaryRow
+                    {
+                        boxTitle = run.box_title,
+                        qrCode = run.qr_code,
+                        itemName = item.item_name_snapshot,
+                        expectedQuantity = item.expected_quantity,
+                        actualQuantity = item.actual_quantity,
+                        status = status,
+                        completedAt = run.completed_at
+                    });
+                }
+            }
+            return result;
+        }
+
+        private static string GetQrIdentity(string value)
+        {
+            List<string> candidates = ExpandQr(value);
+            return candidates.Count > 0 ? candidates[candidates.Count - 1].Trim() : string.Empty;
         }
 
         /// <summary>Ищет активный шкаф по QR-коду или последнему сегменту QR-ссылки.</summary>
@@ -249,6 +566,15 @@ namespace ArInventory.Local
                 .ToList();
         }
 
+        /// <summary>Возвращает GLB-модель коробки из локальной копии базы.</summary>
+        public LocalBoxModel GetBoxModel(long cabinetId)
+        {
+            if (!IsReady || cabinetId <= 0) return null;
+            return db.Table<LocalBoxModel>()
+                .ToList()
+                .FirstOrDefault(model => model.cabinet_id == cabinetId);
+        }
+
         /// <summary>Сохраняет отчёт и отметки пунктов одной транзакцией, чтобы не оставить половину записи.</summary>
         public void SaveInventoryRun(InventoryRunSyncDto report, long cabinetId, long qrCodeId,
             string cabinetTitle, IReadOnlyDictionary<long, string> itemNames)
@@ -261,6 +587,9 @@ namespace ArInventory.Local
                 qr_code_id = qrCodeId,
                 user_id = report.userId,
                 qr_code = report.qrCode,
+                box_title = cabinetTitle ?? string.Empty,
+                client_batch_id = report.clientBatchId ?? string.Empty,
+                expected_box_count = report.expectedBoxCount,
                 started_at = report.startedAt,
                 completed_at = report.completedAt,
                 synced = false,
@@ -269,6 +598,19 @@ namespace ArInventory.Local
 
             db.RunInTransaction(() =>
             {
+                if (!string.IsNullOrWhiteSpace(report.clientBatchId) &&
+                    !db.Table<LocalInventoryBatch>().ToList().Any(batch => batch.client_batch_id == report.clientBatchId))
+                {
+                    db.Insert(new LocalInventoryBatch
+                    {
+                        client_batch_id = report.clientBatchId,
+                        user_id = report.userId,
+                        expected_box_count = System.Math.Max(1, report.expectedBoxCount),
+                        started_at = report.startedAt,
+                        status = "in_progress"
+                    });
+                }
+
                 db.Insert(run);
                 foreach (var result in report.items)
                 {
@@ -278,8 +620,21 @@ namespace ArInventory.Local
                         checklist_item_id = result.itemId,
                         item_name_snapshot = itemNames[result.itemId],
                         status = result.status,
+                        expected_quantity = GetExpectedQuantity(result.itemId),
+                        actual_quantity = result.actualQuantity,
                         comment = result.comment ?? string.Empty
                     });
+                }
+
+                int presentCount = 0;
+                int partialCount = 0;
+                int missingCount = 0;
+                foreach (var result in report.items)
+                {
+                    int expected = GetExpectedQuantity(result.itemId);
+                    if (result.actualQuantity <= 0) missingCount++;
+                    else if (result.actualQuantity < expected) partialCount++;
+                    else presentCount++;
                 }
 
                 db.Insert(new LocalInventorySession
@@ -288,10 +643,31 @@ namespace ArInventory.Local
                     qr_code_id = qrCodeId,
                     action = "inventory",
                     action_time = System.DateTime.Parse(report.completedAt, null, System.Globalization.DateTimeStyles.RoundtripKind),
-                    comment = $"Инвентаризация «{cabinetTitle}»: есть {report.items.Count(item => item.status == "present")}, нет {report.items.Count(item => item.status == "missing")}",
+                    comment = $"Инвентаризация «{cabinetTitle}»: есть {presentCount}, частично {partialCount}, нет {missingCount}",
                     synced = true
                 });
+
+                if (!string.IsNullOrWhiteSpace(report.clientBatchId))
+                {
+                    LocalInventoryBatch batch = db.Table<LocalInventoryBatch>()
+                        .ToList()
+                        .FirstOrDefault(value => value.client_batch_id == report.clientBatchId);
+                    if (batch != null && GetCompletedBoxCount(batch.client_batch_id) >= batch.expected_box_count)
+                    {
+                        batch.status = "completed";
+                        batch.completed_at = report.completedAt;
+                        db.Update(batch);
+                    }
+                }
             });
+
+            int GetExpectedQuantity(long itemId)
+            {
+                LocalCabinetChecklistItem checklistItem = db.Table<LocalCabinetChecklistItem>()
+                    .ToList()
+                    .FirstOrDefault(item => item.id == itemId);
+                return System.Math.Max(1, checklistItem?.expected_quantity ?? 1);
+            }
 
         }
 
@@ -320,17 +696,17 @@ namespace ArInventory.Local
         }
 
 #if UNITY_EDITOR
-        /// <summary>Добавляет тестовый шкаф и пункты чек-листа только в Unity Editor.</summary>
+        /// <summary>Добавляет тестовую коробку и позиции только в Unity Editor.</summary>
         private void EnsureEditorDemoCabinet()
         {
-            const string demoCode = "DEMO-CABINET-001";
+            const string demoCode = "DEMO-BOX-001";
             var qr = db.Table<LocalQrCode>().ToList().FirstOrDefault(item => item.code == demoCode);
             if (qr == null)
             {
                 qr = new LocalQrCode
                 {
                     code = demoCode,
-                    object_name = "Тестовый шкаф инвентаризации",
+                    object_name = "Демо коробка 1",
                     is_active = true
                 };
                 db.Insert(qr);
@@ -344,7 +720,7 @@ namespace ArInventory.Local
                 cabinet = new LocalCabinetProfile
                 {
                     qr_code_id = qr.id,
-                    title = "Тестовый шкаф",
+                    title = "Демо коробка 1",
                     reference_photo_content_type = "image/jpeg",
                     is_active = true
                 };

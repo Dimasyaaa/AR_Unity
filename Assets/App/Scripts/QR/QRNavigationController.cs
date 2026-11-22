@@ -1,6 +1,8 @@
+using System.Collections;
 using UnityEngine;
 using UnityEngine.SceneManagement;
 using UnityEngine.UI;
+using ArInventory.Local;
 
 // Обрабатывает нажатия кнопок QR-панели, размещённой в SampleScene.
 public class QRNavigationController : MonoBehaviour
@@ -23,6 +25,26 @@ public class QRNavigationController : MonoBehaviour
     public void StartScanning()
     {
         BindScannerEvents(QRScanner.Instance);
+
+        if (SessionManager.IsLoggedIn && LocalDatabase.Instance != null && LocalDatabase.Instance.IsReady)
+        {
+            LocalInventoryBatch activeBatch = LocalDatabase.Instance.GetActiveInventoryBatch(SessionManager.UserId);
+            if (activeBatch == null)
+            {
+                LocalInventoryBatch latestBatch = LocalDatabase.Instance.GetLatestInventoryBatch(SessionManager.UserId);
+                if (latestBatch != null && latestBatch.status == "completed")
+                {
+                    SceneManager.LoadScene("StartScene");
+                    return;
+                }
+            }
+            else if (LocalDatabase.Instance.GetCompletedBoxCount(activeBatch.client_batch_id) >= activeBatch.expected_box_count)
+            {
+                SceneManager.LoadScene("StartScene");
+                return;
+            }
+        }
+
         if (scanner == null)
         {
             Debug.LogWarning("[QR] Сканер недоступен.");
@@ -41,6 +63,22 @@ public class QRNavigationController : MonoBehaviour
         SceneManager.LoadScene("StartScene");
     }
 
+    /// <summary>Закрывает отправленный отчёт и запускает сканер следующей назначенной коробки.</summary>
+    public void ContinueAfterReport(GameObject reportScreen)
+    {
+        StartCoroutine(CloseReportAndScan(reportScreen));
+    }
+
+    private IEnumerator CloseReportAndScan(GameObject reportScreen)
+    {
+        if (reportScreen != null)
+            Destroy(reportScreen);
+
+        // Даём Unity убрать Canvas отчёта до открытия системного окна камеры.
+        yield return null;
+        StartScanning();
+    }
+
     private void BindScannerEvents(QRScanner newScanner)
     {
         if (scanner == newScanner) return;
@@ -48,6 +86,7 @@ public class QRNavigationController : MonoBehaviour
         if (scanner != null)
         {
             scanner.OnScanCancelled -= EnableRescanButton;
+            scanner.OnScanRejected -= ShowScanRejection;
             scanner.OnQRScanned -= OnQrScanned;
         }
 
@@ -55,8 +94,15 @@ public class QRNavigationController : MonoBehaviour
         if (scanner != null)
         {
             scanner.OnScanCancelled += EnableRescanButton;
+            scanner.OnScanRejected += ShowScanRejection;
             scanner.OnQRScanned += OnQrScanned;
         }
+    }
+
+    /// <summary>Показывает причину отказа в существующем уведомлении AR-сцены.</summary>
+    private void ShowScanRejection(string message)
+    {
+        VoiceHelpController.Instance?.ShowFeedback(message);
     }
 
     private void EnableRescanButton()

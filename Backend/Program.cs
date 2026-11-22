@@ -25,7 +25,7 @@ builder.Services.AddScoped<UserRepository>();
 builder.Services.AddScoped<QrRepository>();
 builder.Services.AddScoped<SessionRepository>();
 builder.Services.AddScoped<QrDeletionRepository>();
-builder.Services.AddScoped<CabinetRepository>();
+builder.Services.AddScoped<BoxRepository>();
 builder.Services.AddScoped<InventoryRunRepository>();
 builder.Services.AddScoped<InventorySyncService>();
 

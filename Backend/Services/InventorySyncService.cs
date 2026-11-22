@@ -11,24 +11,20 @@ namespace Backend.Services;
 
 /// <summary>
 /// Бизнес-логика обработки синхронизации инвентаризаций с мобильных устройств.
-/// Полностью заменяет старый метод SaveRun из InventoryApi.cs.
-/// Оркестрирует транзакцию: проверяет дубликаты, валидирует данные, 
+/// Оркестрирует транзакцию: проверяет повторы, валидирует данные,
 /// декодирует медиа через ReportMediaService и сохраняет всё в БД через InventoryRunRepository.
 /// </summary>
 public class InventorySyncService
 {
     private readonly NpgsqlDataSource _dataSource;
     private readonly InventoryRunRepository _runRepository;
-    private readonly CabinetRepository _cabinetRepository;
 
     public InventorySyncService(
         NpgsqlDataSource dataSource, 
-        InventoryRunRepository runRepository,
-        CabinetRepository cabinetRepository)
+        InventoryRunRepository runRepository)
     {
         _dataSource = dataSource;
         _runRepository = runRepository;
-        _cabinetRepository = cabinetRepository;
     }
 
     /// <summary>
@@ -75,8 +71,17 @@ public class InventorySyncService
         var duplicateItem = run.items.GroupBy(item => item.itemId).FirstOrDefault(group => group.Count() > 1);
         if (duplicateItem != null)
             throw new ArgumentException("Проверка пропущена: предмет повторяется в списке.");
-        if (run.items.Any(item => item.itemId <= 0 || (item.status != "present" && item.status != "missing")))
-            throw new ArgumentException("Проверка пропущена: для каждого предмета выберите «Есть» или «Нет».");
+        if (run.items.Any(item => item.itemId <= 0 ||
+            (item.actualQuantity is null && item.status is not ("present" or "missing")) ||
+            item.actualQuantity is < 0 or > 100000))
+            throw new ArgumentException("Проверка пропущена: укажите «Есть» или «Нет» и допустимое количество предмета.");
+        if (run.clientBatchId == Guid.Empty)
+            throw new ArgumentException("Проверка пропущена: идентификатор общей инвентаризации некорректен.");
+        if (run.clientBatchId.HasValue && (run.expectedBoxCount is null or < 1))
+            throw new ArgumentException("Проверка пропущена: количество коробок должно быть не меньше одного.");
+        string? reportNote = string.IsNullOrWhiteSpace(run.reportNote) ? null : run.reportNote.Trim();
+        if (reportNote?.Length > 2000)
+            throw new ArgumentException("Текстовая заметка не должна превышать 2000 символов.");
 
         // 2. Проверяем фото и, если пользователь его записал, голосовой комментарий.
         var media = ReportMediaService.ExtractReportMedia(run.photosBase64, run.photoBase64, run.voiceBase64);
@@ -97,56 +102,59 @@ public class InventorySyncService
         if (await userCmd.ExecuteScalarAsync() is null)
             throw new ArgumentException("Проверка пропущена: сотрудник не найден или отключён.");
 
-        // 6. Поиск шкафа по QR-коду (используем CabinetRepository, но в рамках нашей транзакции)
-        // В оригинале был прямой SQL, здесь мы вызываем метод репозитория, но нам нужно передать транзакцию.
-        // Чтобы не усложнять интерфейс CabinetRepository, выполним этот конкретный запрос здесь, 
-        // так как он требует ExpandQr и специфичен для процесса сохранения.
-        await using var cabinetCmd = new NpgsqlCommand(@"
+        // 6. Ищем коробку по QR-коду в рамках текущей транзакции.
+        // Запрос оставлен здесь, чтобы искать QR и читать профиль атомарно с сохранением результата.
+        await using var boxCmd = new NpgsqlCommand(@"
             SELECT c.id, q.id, c.title
-            FROM cabinet_profiles c
+            FROM boxes c
             JOIN qr_codes q ON q.id = c.qr_code_id
             WHERE q.code = ANY(@codes) AND q.is_active = TRUE AND c.is_active = TRUE
             LIMIT 1", conn, transaction);
         
-        var codesParam = cabinetCmd.Parameters.AddWithValue("codes", QrHelper.ExpandQr(run.qrCode).ToArray());
+        var codesParam = boxCmd.Parameters.AddWithValue("codes", QrHelper.ExpandQr(run.qrCode).ToArray());
         codesParam.NpgsqlDbType = NpgsqlTypes.NpgsqlDbType.Array | NpgsqlTypes.NpgsqlDbType.Text;
 
-        await using var cabReader = await cabinetCmd.ExecuteReaderAsync();
+        await using var cabReader = await boxCmd.ExecuteReaderAsync();
         if (!await cabReader.ReadAsync())
-            throw new ArgumentException("Проверка пропущена: шкаф для QR не найден.");
+            throw new ArgumentException("Проверка пропущена: коробка для QR не найдена.");
         
-        long cabinetId = cabReader.GetInt64(0);
+        long boxId = cabReader.GetInt64(0);
         long qrCodeId = cabReader.GetInt64(1);
-        string cabinetTitle = cabReader.GetString(2);
+        string boxTitle = cabReader.GetString(2);
         await cabReader.CloseAsync();
 
         // 7. Получаем названия предметов чек-листа для снапшота
         var requestedIds = run.items.Select(item => item.itemId).ToArray();
         var itemNames = new Dictionary<long, string>();
+        var expectedQuantities = new Dictionary<long, int>();
         
         await using var itemCmd = new NpgsqlCommand(@"
-            SELECT id, item_name
-            FROM cabinet_checklist_items
-            WHERE cabinet_id = @cabinetId AND is_active = TRUE AND id = ANY(@itemIds)", conn, transaction);
-        itemCmd.Parameters.AddWithValue("cabinetId", cabinetId);
+            SELECT id, name, expected_quantity
+            FROM box_items
+            WHERE box_id = @boxId AND is_active = TRUE AND id = ANY(@itemIds)", conn, transaction);
+        itemCmd.Parameters.AddWithValue("boxId", boxId);
         itemCmd.Parameters.AddWithValue("itemIds", requestedIds);
         
         await using var itemReader = await itemCmd.ExecuteReaderAsync();
         while (await itemReader.ReadAsync())
-            itemNames[itemReader.GetInt64(0)] = itemReader.GetString(1);
+        {
+            long itemId = itemReader.GetInt64(0);
+            itemNames[itemId] = itemReader.GetString(1);
+            expectedQuantities[itemId] = itemReader.GetInt32(2);
+        }
         await itemReader.CloseAsync();
 
         // Проверяем, что все запрошенные предметы найдены
         if (itemNames.Count != requestedIds.Length)
-            throw new ArgumentException("Проверка пропущена: перечень шкафа изменился, обновите данные в приложении.");
+            throw new ArgumentException("Проверка пропущена: перечень коробки изменился, обновите данные в приложении.");
 
-        // Проверяем, что в сохраненном перечне ровно столько предметов, сколько в активном чек-листе шкафа
+        // Убедимся, что приложение отправило все позиции активного перечня коробки.
         await using var countCmd = new NpgsqlCommand(@"
-            SELECT COUNT(*) FROM cabinet_checklist_items
-            WHERE cabinet_id = @cabinetId AND is_active = TRUE", conn, transaction);
-        countCmd.Parameters.AddWithValue("cabinetId", cabinetId);
+            SELECT COUNT(*) FROM box_items
+            WHERE box_id = @boxId AND is_active = TRUE", conn, transaction);
+        countCmd.Parameters.AddWithValue("boxId", boxId);
         if (Convert.ToInt64(await countCmd.ExecuteScalarAsync()) != requestedIds.Length)
-            throw new ArgumentException("Проверка пропущена: в сохранённом перечне не все предметы.");
+            throw new ArgumentException("Проверка пропущена: в сохранённом списке коробки отсутствуют позиции.");
 
         // 8. Парсинг времени
         var startedAt = TimeHelper.ParseTime(run.startedAt, DateTimeOffset.UtcNow);
@@ -155,9 +163,27 @@ public class InventorySyncService
             throw new ArgumentException("Проверка пропущена: время завершения раньше времени начала.");
 
         // 9. Создание записи инвентаризации
+        // Для офлайн-работы пакет создаётся при первой синхронизации, а следующие
+        // проверки с тем же clientBatchId продолжат заполнять именно его.
+        long? batchId = null;
+        if (run.clientBatchId is Guid clientBatchId)
+        {
+            batchId = await _runRepository.GetOrCreateBatchIdAsync(
+                conn, transaction, clientBatchId, (int)run.userId,
+                run.expectedBoxCount!.Value, startedAt.UtcDateTime);
+            if (batchId is null)
+                throw new ArgumentException("Проверка пропущена: параметры общей инвентаризации не совпадают.");
+
+            if (!await _runRepository.IsQrAllowedInBatchAsync(conn, transaction, batchId.Value, qrCodeId))
+                throw new ArgumentException("Эта коробка не включена в назначенную сотруднику инвентаризацию.");
+
+            if (await _runRepository.BatchAlreadyContainsQrAsync(conn, transaction, batchId.Value, qrCodeId))
+                throw new ArgumentException("Эта коробка уже проверена в текущей общей инвентаризации.");
+        }
+
         long inventoryRunId = await _runRepository.CreateRunAsync(
-            conn, transaction, run.clientRunId, cabinetId, (int)run.userId, qrCodeId, 
-            startedAt.UtcDateTime, completedAt.UtcDateTime);
+            conn, transaction, run.clientRunId, boxId, (int)run.userId, qrCodeId,
+            startedAt.UtcDateTime, completedAt.UtcDateTime, batchId, reportNote);
         
         if (inventoryRunId == -1) // Сработало ON CONFLICT DO NOTHING
         {
@@ -186,22 +212,37 @@ public class InventorySyncService
         // 11. Сохранение отметок по чек-листу
         foreach (var item in run.items)
         {
+            int expectedQuantity = expectedQuantities[item.itemId];
+            int actualQuantity = item.actualQuantity ??
+                (item.status == "present" ? expectedQuantity : 0);
+            string status = actualQuantity == 0
+                ? "missing"
+                : actualQuantity < expectedQuantity ? "partial" : "present";
+
             await _runRepository.InsertRunItemAsync(
-                conn, transaction, inventoryRunId, item.itemId, itemNames[item.itemId], item.status, item.comment);
+                conn, transaction, inventoryRunId, item.itemId, itemNames[item.itemId], status,
+                expectedQuantity, actualQuantity, item.comment);
         }
 
         // 12. Логирование события в журнал сессий
-        int present = run.items.Count(item => item.status == "present");
-        int missing = run.items.Count - present;
+        int present = run.items.Count(item => item.actualQuantity is null
+            ? item.status == "present"
+            : item.actualQuantity.Value >= expectedQuantities[item.itemId]);
+        int missing = run.items.Count(item => item.actualQuantity == 0 ||
+            (item.actualQuantity is null && item.status == "missing"));
+        int partial = run.items.Count - present - missing;
         await using var logCmd = new NpgsqlCommand(@"
             INSERT INTO inventory_sessions (user_id, qr_code_id, action, comment, action_time)
             VALUES (@userId, @qrCodeId, 'inventory', @comment, @completedAt)", conn, transaction);
         
         logCmd.Parameters.AddWithValue("userId", run.userId);
         logCmd.Parameters.AddWithValue("qrCodeId", qrCodeId);
-        logCmd.Parameters.AddWithValue("comment", $"Инвентаризация «{cabinetTitle}»: есть {present}, нет {missing}");
+        logCmd.Parameters.AddWithValue("comment", $"Инвентаризация «{boxTitle}»: есть {present}, частично {partial}, нет {missing}");
         logCmd.Parameters.AddWithValue("completedAt", completedAt.UtcDateTime);
         await logCmd.ExecuteNonQueryAsync();
+
+        if (batchId.HasValue)
+            await _runRepository.CompleteBatchIfReadyAsync(conn, transaction, batchId.Value, completedAt.UtcDateTime);
 
         // 13. Коммит транзакции
         await transaction.CommitAsync();

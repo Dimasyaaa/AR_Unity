@@ -116,7 +116,7 @@ namespace ArInventory.Local
                 }
             }
 
-            // Отдельно отправляем отчёты инвентаризации вместе с сохранёнными фото и голосом.
+            // Отдельно отправляем отчёты с фотографиями; голосовой комментарий необязателен.
             var pendingRuns = LocalDatabase.Instance.Connection.Query<LocalInventoryRun>(
                 "SELECT id FROM local_inventory_runs WHERE synced = 0 ORDER BY id");
             if (pendingRuns.Count == 0) { onDone?.Invoke(sessionSummary); yield break; }
@@ -202,9 +202,11 @@ namespace ArInventory.Local
                 try
                 {
                     dto = JsonUtility.FromJson<InventoryRunSyncDto>(run.report_payload);
+                    bool hasPhotos = dto != null &&
+                        (dto.photosBase64 != null && dto.photosBase64.Length > 0 ||
+                         !string.IsNullOrEmpty(dto.photoBase64));
                     if (dto != null && dto.clientRunId == run.client_run_id &&
-                        (dto.photosBase64 != null && dto.photosBase64.Length > 0 || !string.IsNullOrEmpty(dto.photoBase64)) &&
-                        !string.IsNullOrEmpty(dto.voiceBase64))
+                        hasPhotos)
                         return true;
                 }
                 catch (ArgumentException) { }
@@ -281,6 +283,8 @@ namespace ArInventory.Local
             dto = new InventoryRunSyncDto
             {
                 clientRunId = run.client_run_id,
+                clientBatchId = string.IsNullOrWhiteSpace(run.client_batch_id) ? null : run.client_batch_id,
+                expectedBoxCount = run.expected_box_count,
                 userId = run.user_id,
                 qrCode = run.qr_code,
                 startedAt = run.started_at,
@@ -337,6 +341,8 @@ namespace ArInventory.Local
     public class InventoryRunSyncDto
     {
         public string clientRunId;
+        public string clientBatchId;
+        public int expectedBoxCount;
         public long userId;
         public string qrCode;
         public string startedAt;
@@ -345,10 +351,17 @@ namespace ArInventory.Local
         public string photoBase64;
         public string[] photosBase64;
         public string voiceBase64;
+        public string reportNote;
     }
     /// <summary>Результат одного пункта чек-листа в запросе синхронизации.</summary>
     [Serializable]
-    public class InventoryRunItemSyncDto { public long itemId; public string status; public string comment; }
+    public class InventoryRunItemSyncDto
+    {
+        public long itemId;
+        public string status;
+        public int actualQuantity;
+        public string comment;
+    }
 
     /// <summary>Результат обработки пакета проверок сервером.</summary>
     [Serializable]

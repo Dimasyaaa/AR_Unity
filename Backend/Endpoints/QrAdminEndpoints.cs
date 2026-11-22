@@ -57,15 +57,15 @@ public static class QrAdminEndpoints
 
         endpoints.MapDelete("/api/admin/qr/{id:long}", async (long id, QrDeletionRepository qrDeletion) =>
         {
-            var deletion = await qrDeletion.DeleteQrAndDependenciesAsync(id, requireCabinet: false);
+            var deletion = await qrDeletion.DeleteQrAndDependenciesAsync(id, requireBox: false);
             if (!deletion.QrFound)
                 return Results.NotFound(new { success = false, message = "QR-код не найден" });
 
             return Results.Ok(new
             {
                 success = true,
-                message = deletion.CabinetFound
-                    ? "Шкаф, QR-код и история инвентаризаций удалены"
+                message = deletion.BoxFound
+                    ? "Коробка, QR-код и история инвентаризаций удалены"
                     : "QR-код удалён; события журнала сохранены без связи с ним",
                 deletion.DeletedRunItems,
                 deletion.DeletedRuns,

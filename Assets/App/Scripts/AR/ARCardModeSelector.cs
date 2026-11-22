@@ -29,6 +29,14 @@ public static class ARCardModeSelector
             return;
         }
 
+        // Объёмная модель остаётся AR-объектом и не открывается плоским оверлеем.
+        if (prefab.GetComponentInChildren<BoxModelsCardController>(true) != null)
+        {
+            if (!ARCardSpawnUtility.IsCardAlreadyPresent(prefab))
+                ARCardSpawnUtility.SelectForPlacement(prefab);
+            return;
+        }
+
         CloseDialog();
         dialog = new GameObject("ARCardModeDialog", typeof(Canvas), typeof(CanvasScaler), typeof(GraphicRaycaster));
         var canvas = dialog.GetComponent<Canvas>();
@@ -260,7 +268,8 @@ public static class ARCardModeSelector
     private static string GetDisplayName(GameObject prefab)
     {
         if (prefab.GetComponent<InventoryChecklistController>() != null) return "инвентаризацию";
-        if (prefab.GetComponent<ImageCardController>() != null) return "фото шкафа";
+        if (prefab.GetComponent<ImageCardController>() != null) return "содержимое коробки";
+        if (prefab.GetComponent<BoxModelsCardController>() != null) return "3D-модели коробки";
         if (prefab.GetComponent<CalculatorController>() != null) return "калькулятор";
         return prefab.name;
     }
