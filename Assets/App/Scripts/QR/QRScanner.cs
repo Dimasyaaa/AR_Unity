@@ -20,14 +20,14 @@ public class QRScanner : MonoBehaviour
     public event Action<string> OnScanRejected;
 
     [Header("Тестирование в Unity Editor")]
-    [SerializeField] private string editorTestQrCode = "DEMO-BOX-001";
+    [SerializeField] private string editorTestQrCode = "test_box_01";
     [SerializeField] private string[] editorTestQrCodes =
     {
-        "DEMO-BOX-001",
-        "DEMO-BOX-002",
-        "DEMO-BOX-003",
-        "DEMO-BOX-004",
-        "DEMO-BOX-005"
+        "test_box_01",
+        "test_box_02",
+        "test_box_03",
+        "test_box_04",
+        "test_box_05"
     };
     [SerializeField, Min(0)] private int editorTestQrCodeIndex;
     [SerializeField] private bool editorAdvanceQrAfterSuccessfulScan = true;

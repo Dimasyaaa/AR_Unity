@@ -3237,7 +3237,6 @@ MonoBehaviour:
   batchProgressText: {fileID: 121798830}
   batchSummaryPanel: {fileID: 1575704411}
   batchSummaryText: {fileID: 55049535}
-  expectedBoxCount: 5
 --- !u!4 &1487161745
 Transform:
   m_ObjectHideFlags: 0
@@ -4833,13 +4832,13 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 86a6faafd5de1fa49a8bef9c2b90ee6b, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::QRScanner
-  editorTestQrCode: DEMO-BOX-001
+  editorTestQrCode: test_box_01
   editorTestQrCodes:
-  - DEMO-BOX-001
-  - DEMO-BOX-002
-  - DEMO-BOX-003
-  - DEMO-BOX-004
-  - DEMO-BOX-005
+  - test_box_01
+  - test_box_02
+  - test_box_03
+  - test_box_04
+  - test_box_05
   editorTestQrCodeIndex: 0
   editorAdvanceQrAfterSuccessfulScan: 1
   editorScanDelaySeconds: 0.75
