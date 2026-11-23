@@ -1,7 +1,9 @@
-// Управление пользователями
+// Раздел управления пользователями и подразделениями.
+// Данные и операции с ними остаются внутри этого модуля.
 let departmentsData = [];
 let usersData = [];
 
+// Загружает список подразделений для формы пользователя.
 async function loadDepartments() {
   try {
     const res = await fetch(`${API}/api/admin/departments`);
@@ -11,6 +13,7 @@ async function loadDepartments() {
   }
 }
 
+// Наполняет список отделов и при необходимости добавляет новый.
 function fillDepartmentSelect(selected = null) {
   const select = document.getElementById('user-department');
   select.innerHTML = '';
@@ -31,11 +34,13 @@ function fillDepartmentSelect(selected = null) {
   toggleNewDepartment(select.value === '__new__');
 }
 
+// Показывает или скрывает поле ввода нового подразделения.
 function toggleNewDepartment(show) {
   const el = document.getElementById('user-department-new-group');
   if (el) el.style.display = show ? 'block' : 'none';
 }
 
+// Загружает пользователей и передаёт их в отрисовку таблицы.
 async function loadUsers() {
   try {
     const res = await fetch(`${API}/api/admin/users`);
@@ -46,11 +51,13 @@ async function loadUsers() {
   }
 }
 
+// Фильтрует пользователей и строит строки таблицы.
 function renderUsers() {
-  const search = document.getElementById('search-users').value.toLowerCase();
+  const search = (document.getElementById('search-users')?.value || '').toLowerCase();
   const tbody = document.getElementById('users-body');
+  if (!tbody) return;
   const filtered = usersData.filter(u =>
-    u.fullName.toLowerCase().includes(search) || u.department.toLowerCase().includes(search)
+    String(u.fullName || '').toLowerCase().includes(search) || String(u.department || '').toLowerCase().includes(search)
   );
   if (filtered.length === 0) {
     tbody.innerHTML = '<tr><td colspan="6" class="empty">Нет пользователей</td></tr>';
@@ -68,11 +75,13 @@ function renderUsers() {
           <button class="btn btn-secondary btn-sm" onclick="toggleUser(${u.id})">${u.isActive ? 'Отключить' : 'Включить'}</button>
           <button class="btn btn-secondary btn-sm" onclick="editUser(${u.id})">Изменить</button>
           <button class="btn btn-danger btn-sm" onclick="deleteUser(${u.id})">Удалить</button>
+        </div>
         </td>
       </tr>
   `).join('');
 }
 
+// Открывает форму создания или редактирования и загружает список отделов.
 async function openUserModal(user = null) {
   document.getElementById('user-modal-title').textContent = user ? 'Редактирование пользователя' : 'Новый пользователь';
   document.getElementById('user-id').value = user ? user.id : '';
@@ -85,6 +94,7 @@ async function openUserModal(user = null) {
   document.getElementById('modal-user').classList.add('open');
 }
 
+// Проверяет поля формы и создаёт пользователя либо сохраняет изменения.
 async function saveUser() {
   const id = document.getElementById('user-id').value;
   const select = document.getElementById('user-department');
@@ -109,6 +119,7 @@ async function saveUser() {
   } catch (e) { toast('Ошибка сети', 'error'); }
 }
 
+// Включает или отключает учётную запись пользователя.
 async function toggleUser(id) {
   const res = await fetch(`${API}/api/admin/users/${id}/toggle`, { method: 'PATCH' });
   const data = await res.json();
@@ -116,6 +127,7 @@ async function toggleUser(id) {
   loadUsers();
 }
 
+// Удаляет пользователя после подтверждения действия.
 async function deleteUser(id) {
   if (!confirm('Удалить пользователя? Все его сессии будут удалены каскадно.')) return;
   const res = await fetch(`${API}/api/admin/users/${id}`, { method: 'DELETE' });
@@ -125,9 +137,9 @@ async function deleteUser(id) {
   loadUsers();
 }
 
-// Экспорт в глобальную область для HTML
-window.usersData = usersData;
+// Экспортируем только обработчики, которые вызываются из HTML.
 window.loadUsers = loadUsers;
+window.getUsersData = () => usersData;
 window.editUser = id => { const u = usersData.find(x => x.id === id); if (u) openUserModal(u); };
 window.saveUser = saveUser;
 window.toggleUser = toggleUser;

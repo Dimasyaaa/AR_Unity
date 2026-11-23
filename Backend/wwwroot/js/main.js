@@ -1,5 +1,7 @@
-// AR Inventory — панель администратора
-// Навигация по вкладкам
+// Главная логика админ-панели: переключение разделов, проверка API
+// и обновление открытого журнала или списка проверок.
+
+// Переключает разделы и загружает данные выбранной вкладки.
 document.querySelectorAll('.tab').forEach(tab => {
   tab.onclick = () => {
     document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
@@ -9,8 +11,8 @@ document.querySelectorAll('.tab').forEach(tab => {
       const panel = document.getElementById('panel-' + p);
       if (panel) panel.style.display = (p === name) ? 'block' : 'none';
     });
-    
-    // Загружаем данные при переключении вкладки
+
+    // Запрашиваем данные только для открытой вкладки.
     if (name === 'users' && typeof loadUsers === 'function') loadUsers();
     if (name === 'qr' && typeof loadQr === 'function') loadQr();
     if (name === 'inventory' && typeof loadInventoryBoxes === 'function') loadInventoryBoxes();
@@ -19,7 +21,7 @@ document.querySelectorAll('.tab').forEach(tab => {
   };
 });
 
-// Проверка статуса API при загрузке
+// Проверяет доступность API и обновляет индикатор в шапке страницы.
 async function checkApiStatus() {
   const pill = document.getElementById('api-status');
   if (!pill) return;
@@ -36,7 +38,7 @@ async function checkApiStatus() {
   }
 }
 
-// Фоновое обновление данных на активных вкладках
+// Обновляет журнал или результаты, когда пользователь вернулся на страницу.
 function refreshVisibleAdminPanel() {
   if (document.visibilityState !== 'visible') return;
   if (document.getElementById('panel-sessions')?.style.display !== 'none' && typeof loadSessions === 'function') {
@@ -46,11 +48,11 @@ function refreshVisibleAdminPanel() {
   }
 }
 
-// Инициализация
+// При старте проверяет API, загружает пользователей и включает автообновление.
 document.addEventListener('DOMContentLoaded', () => {
   checkApiStatus();
-  if (typeof loadUsers === 'function') loadUsers(); // Загружаем пользователей по умолчанию
-  
+  if (typeof loadUsers === 'function') loadUsers();
+
   setInterval(refreshVisibleAdminPanel, 10000);
   window.addEventListener('focus', refreshVisibleAdminPanel);
   document.addEventListener('visibilitychange', refreshVisibleAdminPanel);

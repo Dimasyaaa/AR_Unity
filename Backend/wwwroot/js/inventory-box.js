@@ -1,4 +1,4 @@
-// Управление коробками, фото, 3D-моделями и назначениями
+// Настройка содержимого коробки: позиции, фотографии, GLB-модель и QR-код.
 let inventoryBoxes = [];
 let inventoryCurrent = null;
 const photosMarkedForRemoval = new Set();
@@ -6,6 +6,7 @@ let removeCurrentModel = false;
 let inventoryPhotoDrafts = [];
 let nextInventoryPhotoKey = 1;
 
+// Разбирает строки вида «название | количество | тип модели» из текстового поля.
 function parseInventoryItemLines(value) {
   return value.split(/\r?\n/).map(line => {
     const trimmed = line.trim();
@@ -21,6 +22,7 @@ function parseInventoryItemLines(value) {
   }).filter(Boolean);
 }
 
+// Показывает предварительный список позиций до сохранения коробки.
 function renderInventoryItemsPreview() {
   const preview = document.getElementById('inventory-items-preview');
   if (!preview) return;
@@ -28,47 +30,51 @@ function renderInventoryItemsPreview() {
   preview.innerHTML = items.map(item => `<li>${escapeHtml(item.name)} <span class="hint">· по учёту: ${item.expectedQuantity} · 3D: ${escapeHtml(item.modelType)}</span></li>`).join('') || '<li class="checklist-preview-empty">Позиции появятся здесь в указанном порядке</li>';
 }
 
+// Загружает список QR-кодов и настроенных для них коробок.
 async function loadInventoryBoxes() {
   try {
     const response = await fetch(`${API}/api/admin/inventory/boxes`);
-    if (!response.ok) throw new Error('Сервер не вернул список шкафов');
+    if (!response.ok) throw new Error('Сервер не вернул список коробок');
     inventoryBoxes = await response.json();
     renderInventoryBoxes();
   } catch (error) {
     const tbody = document.getElementById('inventory-boxes-body');
     if (tbody) tbody.innerHTML = `<tr><td colspan="6" class="empty">Не удалось загрузить список: ${escapeHtml(error.message)}.</td></tr>`;
-    toast('Не удалось загрузить шкафы: ' + error.message, 'error');
+    toast('Не удалось загрузить коробки: ' + error.message, 'error');
   }
 }
 
+// Отрисовывает коробки и действия для их настройки или удаления.
 function renderInventoryBoxes() {
   const tbody = document.getElementById('inventory-boxes-body');
   if (!tbody) return;
   const search = (document.getElementById('search-inventory').value || '').toLowerCase();
   const rows = inventoryBoxes.filter(item =>
-    item.qrCode.toLowerCase().includes(search) || item.title.toLowerCase().includes(search) || item.objectName.toLowerCase().includes(search)
+    String(item.qrCode || '').toLowerCase().includes(search) || String(item.title || '').toLowerCase().includes(search) || String(item.objectName || '').toLowerCase().includes(search)
   );
   if (!rows.length) {
-    tbody.innerHTML = '<tr><td colspan="6" class="empty">Шкафы не найдены. Сначала создайте QR-код во вкладке «QR-коды».</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="6" class="empty">Коробки не найдены. Сначала создайте QR-код во вкладке «QR-коды».</td></tr>';
     return;
   }
   tbody.innerHTML = rows.map(item => `
     <tr>
       <td><code>${escapeHtml(item.qrCode)}</code><div class="hint">${escapeHtml(item.objectName)}</div></td>
-      <td>${item.cabinetId ? escapeHtml(item.title) : '<span class="badge badge-warning">Не настроен</span>'}</td>
+      <td>${item.boxId ? escapeHtml(item.title) : '<span class="badge badge-warning">Не настроена</span>'}</td>
       <td>${item.photoAvailable ? '<span class="badge badge-success">Добавлено</span>' : '<span class="badge badge-warning">Нет фото</span>'}</td>
+      <td>${item.modelAvailable ? '<span class="badge badge-success">GLB добавлена</span>' : '<span class="badge badge-warning">Примитивы</span>'}</td>
       <td>${item.itemCount}</td>
       <td><div class="row-actions">
-        <button class="btn btn-secondary btn-sm" onclick="openInventoryBox(${item.qrCodeId})">${item.cabinetId ? 'Настроить' : 'Создать шкаф'}</button>
-        ${item.cabinetId ? `<button class="btn btn-danger btn-sm" onclick="deleteInventoryBox(${item.qrCodeId})">Удалить шкаф</button>` : ''}
+        <button class="btn btn-secondary btn-sm" onclick="openInventoryBox(${item.qrCodeId})">${item.boxId ? 'Настроить' : 'Создать коробку'}</button>
+        ${item.boxId ? `<button class="btn btn-danger btn-sm" onclick="deleteInventoryBox(${item.qrCodeId})">Удалить коробку</button>` : ''}
       </div></td>
     </tr>`).join('');
 }
 
+// Предлагает QR-коды, для которых ещё не заведена коробка.
 async function openNewInventoryBox() {
   try {
     await loadInventoryBoxes();
-    const available = inventoryBoxes.filter(item => !item.cabinetId);
+    const available = inventoryBoxes.filter(item => !item.boxId);
     const select = document.getElementById('new-inventory-qr');
     select.innerHTML = available.map(item => `<option value="${Number(item.qrCodeId)}">${escapeHtml(item.qrCode)}${item.objectName ? ` — ${escapeHtml(item.objectName)}` : ''}</option>`).join('');
     if (!available.length) {
@@ -79,6 +85,7 @@ async function openNewInventoryBox() {
   } catch (error) { toast('Не удалось получить список QR-кодов: ' + error.message, 'error'); }
 }
 
+// Открывает форму новой коробки для выбранного QR-кода.
 function createInventoryBoxFromQr() {
   const qrCodeId = Number(document.getElementById('new-inventory-qr').value);
   if (!qrCodeId) return toast('Выберите QR-код.', 'error');
@@ -86,25 +93,27 @@ function createInventoryBoxFromQr() {
   openInventoryBox(qrCodeId);
 }
 
+// Удаляет коробку вместе с её QR-кодом и связанными данными после подтверждения.
 async function deleteInventoryBox(qrCodeId) {
   const box = inventoryBoxes.find(item => Number(item.qrCodeId) === Number(qrCodeId));
-  if (!box?.cabinetId) return toast('Настроенный шкаф не найден.', 'error');
+  if (!box?.boxId) return toast('Настроенная коробка не найдена.', 'error');
   const title = box.title || box.objectName || box.qrCode;
-  if (!confirm(`Удалить шкаф «${title}» (${box.qrCode}) вместе с QR-кодом, фотографиями, перечнем и всей историей? Это действие нельзя отменить.`)) return;
+  if (!confirm(`Удалить коробку «${title}» (${box.qrCode}) вместе с QR-кодом, фотографиями, перечнем и всей историей? Это действие нельзя отменить.`)) return;
   try {
     const response = await fetch(`${API}/api/admin/inventory/boxes/${qrCodeId}`, { method: 'DELETE' });
     const data = await response.json();
-    if (!response.ok) throw new Error(data.message || 'Не удалось удалить шкаф');
-    toast(data.message || 'Шкаф и его история удалены');
+    if (!response.ok) throw new Error(data.message || 'Не удалось удалить коробку');
+    toast(data.message || 'Коробка и её история удалены');
     await Promise.all([loadInventoryBoxes(), typeof loadInventoryRuns === 'function' && loadInventoryRuns()]);
-  } catch (error) { toast('Ошибка удаления шкафа: ' + error.message, 'error'); }
+  } catch (error) { toast('Ошибка удаления коробки: ' + error.message, 'error'); }
 }
 
+// Загружает данные выбранной коробки и заполняет форму её редактирования.
 async function openInventoryBox(qrCodeId) {
   try {
     const response = await fetch(`${API}/api/admin/inventory/boxes/${qrCodeId}`);
     const data = await response.json();
-    if (!response.ok) throw new Error(data.message || 'Не удалось загрузить шкаф');
+    if (!response.ok) throw new Error(data.message || 'Не удалось загрузить коробку');
     inventoryCurrent = data;
     document.getElementById('inventory-qr-id').value = qrCodeId;
     document.getElementById('inventory-qr-code').value = data.qrCode;
@@ -133,6 +142,7 @@ async function openInventoryBox(qrCodeId) {
   } catch (error) { toast(error.message, 'error'); }
 }
 
+// Отмечает существующую фотографию для удаления или отменяет это действие.
 function toggleRemovePhoto(page, button) {
   if (photosMarkedForRemoval.has(page)) photosMarkedForRemoval.delete(page);
   else photosMarkedForRemoval.add(page);
@@ -142,6 +152,7 @@ function toggleRemovePhoto(page, button) {
   }
 }
 
+// Добавляет в форму ещё одно поле для фотографии содержимого коробки.
 function addInventoryPhotoInput() {
   const allPages = [...(inventoryCurrent?.photos || []).map(photo => Number(photo.pageNumber) || 0), ...inventoryPhotoDrafts.map(draft => draft.pageNumber)];
   const nextPage = Math.max(0, ...allPages) + 1;
@@ -149,6 +160,7 @@ function addInventoryPhotoInput() {
   renderInventoryPhotoInputs();
 }
 
+// Удаляет черновое поле или переключает признак удаления сохранённой фотографии.
 function removeInventoryPhotoInput(key) {
   const draft = inventoryPhotoDrafts.find(item => item.key === key);
   if (!draft) return;
@@ -161,6 +173,7 @@ function removeInventoryPhotoInput(key) {
   renderInventoryPhotoInputs();
 }
 
+// Отрисовывает фото, поля выбора файлов и обработчики этих полей.
 function renderInventoryPhotoInputs() {
   const list = document.getElementById('inventory-photo-list');
   if (!list) return;
@@ -184,6 +197,7 @@ function renderInventoryPhotoInputs() {
   });
 }
 
+// Проверяет выбранное изображение и сохраняет его как черновик загрузки.
 function selectInventoryPhoto(key, event) {
   const draft = inventoryPhotoDrafts.find(item => item.key === key);
   const file = event.target.files[0];
@@ -197,6 +211,7 @@ function selectInventoryPhoto(key, event) {
   renderInventoryPhotoInputs();
 }
 
+// Переключает признак удаления текущей GLB-модели.
 function toggleRemoveModel() {
   removeCurrentModel = !removeCurrentModel;
   const button = document.getElementById('inventory-model-remove');
@@ -206,11 +221,12 @@ function toggleRemoveModel() {
   }
 }
 
+// Проверяет форму, кодирует новые файлы и отправляет изменения коробки в API.
 async function saveInventoryBox() {
   const qrCodeId = document.getElementById('inventory-qr-id').value;
   const title = document.getElementById('inventory-title').value.trim();
   const items = parseInventoryItemLines(document.getElementById('inventory-items').value);
-  if (!title) return toast('Укажите название шкафа', 'error');
+  if (!title) return toast('Укажите название коробки', 'error');
   if (!items.length) return toast('Добавьте хотя бы одну позицию', 'error');
   if (items.some(item => !item.name || item.expectedQuantity < 1)) return toast('Для каждой позиции укажите название и целое количество > 0', 'error');
   if (new Set(items.map(item => item.name.toLocaleLowerCase('ru-RU'))).size !== items.length) return toast('Удалите повторяющиеся названия позиций', 'error');
@@ -240,19 +256,18 @@ async function saveInventoryBox() {
         body.removeModel = false;
       } catch (error) { return toast(error.message, 'error'); }
     }
-    
-    const response = await fetch(`${API}/api/admin/inventory/cabinets/${qrCodeId}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const response = await fetch(`${API}/api/admin/inventory/boxes/${qrCodeId}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
     const data = await response.json();
-    if (!response.ok) return toast(data.message || 'Не удалось сохранить шкаф', 'error');
-    toast(data.message || 'Данные шкафа сохранены');
+    if (!response.ok) return toast(data.message || 'Не удалось сохранить коробку', 'error');
+    toast(data.message || 'Данные коробки сохранены');
     closeModal('modal-inventory');
     await loadInventoryBoxes();
   } catch (error) { toast('Ошибка сети: ' + error.message, 'error'); }
 }
 
-// Экспорт в глобальную область
-window.inventoryBoxes = inventoryBoxes;
+// Экспортируем только функции, к которым обращаются кнопки и другие модули.
 window.loadInventoryBoxes = loadInventoryBoxes;
+window.getInventoryBoxes = () => inventoryBoxes;
 window.openNewInventoryBox = openNewInventoryBox;
 window.createInventoryBoxFromQr = createInventoryBoxFromQr;
 window.deleteInventoryBox = deleteInventoryBox;

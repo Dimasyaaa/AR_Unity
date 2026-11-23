@@ -1,6 +1,8 @@
-// Журнал событий
+// Журнал действий сотрудников: загрузка, фильтрация и удаление записей.
 let adminSessionsData = [];
 let sessionsLoadInFlight = false;
+
+// Подписи и цвета для кодов действий, которые сохраняет приложение.
 const actionPresentation = {
   login: { label: 'Вход', badge: 'badge-info' },
   logout: { label: 'Выход', badge: 'badge-info' },
@@ -10,6 +12,7 @@ const actionPresentation = {
   error: { label: 'Ошибка', badge: 'badge-danger' }
 };
 
+// Загружает журнал. Флаг silent отключает уведомление при фоновом обновлении.
 async function loadSessions(silent = false) {
   if (sessionsLoadInFlight) return;
   sessionsLoadInFlight = true;
@@ -28,6 +31,7 @@ async function loadSessions(silent = false) {
   }
 }
 
+// Фильтрует события и формирует строки таблицы журнала.
 function renderSessions() {
   const tbody = document.getElementById('sessions-body');
   const actionFilter = document.getElementById('sessions-action-filter').value;
@@ -62,6 +66,7 @@ function renderSessions() {
   }).join('');
 }
 
+// Удаляет одну запись журнала после подтверждения.
 async function deleteSession(id) {
   if (!confirm('Удалить эту запись из журнала?')) return;
   try {
@@ -73,6 +78,7 @@ async function deleteSession(id) {
   } catch (e) { toast('Ошибка сети', 'error'); }
 }
 
+// Очищает журнал целиком после отдельного подтверждения администратора.
 async function clearAllSessions() {
   if (!confirm('Удалить ВСЕ записи журнала? Действие необратимо.')) return;
   try {
@@ -84,7 +90,7 @@ async function clearAllSessions() {
   } catch (e) { toast('Ошибка сети', 'error'); }
 }
 
-window.adminSessionsData = adminSessionsData;
+// Наружу экспортируются только действия, вызываемые из HTML.
 window.loadSessions = loadSessions;
 window.deleteSession = deleteSession;
 window.clearAllSessions = clearAllSessions;

@@ -1,6 +1,8 @@
-// объявление подключения и обработкич всех необходимых данных
-const API = ''; // тот же хост, что и страница
+// Общие помощники админ-панели. Этот файл подключается первым, чтобы остальные
+// модули могли пользоваться API и функциями отображения.
+const API = ''; // Пустой адрес означает, что API находится на том же хосте.
 
+// Показывает короткое сообщение о результате действия.
 function toast(msg, type = 'success') {
   const el = document.getElementById('toast');
   if (!el) return;
@@ -9,6 +11,7 @@ function toast(msg, type = 'success') {
   setTimeout(() => el.classList.remove('show'), 2500);
 }
 
+// Закрывает модальное окно и останавливает воспроизведение аудио в отчёте.
 function closeModal(id) {
   const modal = document.getElementById(id);
   if (modal) {
@@ -19,6 +22,7 @@ function closeModal(id) {
   }
 }
 
+// Приводят даты сервера к формату, принятому в русском интерфейсе.
 function formatDate(d) {
   if (!d) return '--';
   return new Date(d).toLocaleDateString('ru-RU');
@@ -29,6 +33,7 @@ function formatDateTime(d) {
   return new Date(d).toLocaleString('ru-RU');
 }
 
+// Экранирует текст перед вставкой в HTML, чтобы данные не стали разметкой.
 function escapeHtml(s) {
   if (s == null) return '';
   return String(s).replace(/[&<>"']/g, c => ({
@@ -36,6 +41,7 @@ function escapeHtml(s) {
   }[c]));
 }
 
+// Читает выбранный файл и возвращает только Base64-часть для API.
 function readImageAsBase64(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -45,6 +51,7 @@ function readImageAsBase64(file) {
   });
 }
 
+// Читает GLB-файл для отправки в JSON-запросе.
 function readFileAsBase64(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -54,7 +61,7 @@ function readFileAsBase64(file) {
   });
 }
 
-// Делаем функции доступными глобально для HTML onclick
+// Функции, вызываемые из HTML-разметки, должны быть доступны через window.
 window.toast = toast;
 window.closeModal = closeModal;
 window.formatDate = formatDate;

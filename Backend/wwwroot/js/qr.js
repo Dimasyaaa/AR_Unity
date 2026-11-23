@@ -1,6 +1,7 @@
-// Управление QR-кодами
+// Раздел просмотра и редактирования QR-кодов.
 let qrData = [];
 
+// Получает QR-коды от API и обновляет таблицу.
 async function loadQr() {
   try {
     const res = await fetch(`${API}/api/admin/qr`);
@@ -9,11 +10,13 @@ async function loadQr() {
   } catch (e) { toast('Ошибка загрузки: ' + e.message, 'error'); }
 }
 
+// Фильтрует QR-коды по значению и названию объекта.
 function renderQr() {
-  const search = document.getElementById('search-qr').value.toLowerCase();
+  const search = (document.getElementById('search-qr')?.value || '').toLowerCase();
   const tbody = document.getElementById('qr-body');
-  const filtered = qrData.filter(q => q.code.toLowerCase().includes(search) || q.objectName.toLowerCase().includes(search));
-  
+  if (!tbody) return;
+  const filtered = qrData.filter(q => String(q.code || '').toLowerCase().includes(search) || String(q.objectName || '').toLowerCase().includes(search));
+
   if (filtered.length === 0) {
     tbody.innerHTML = '<tr><td colspan="6" class="empty">Нет QR-кодов</td></tr>';
     return;
@@ -35,6 +38,7 @@ function renderQr() {
   `).join('');
 }
 
+// Заполняет модальное окно значениями выбранного QR-кода или значениями по умолчанию.
 function openQrModal(qr = null) {
   document.getElementById('qr-modal-title').textContent = qr ? 'Редактирование QR-кода' : 'Новый QR-код';
   document.getElementById('qr-id').value = qr ? qr.id : '';
@@ -44,6 +48,7 @@ function openQrModal(qr = null) {
   document.getElementById('modal-qr').classList.add('open');
 }
 
+// Создаёт QR-код или сохраняет изменения существующей записи.
 async function saveQr() {
   const id = document.getElementById('qr-id').value;
   const body = {
@@ -63,6 +68,7 @@ async function saveQr() {
   } catch (e) { toast('Ошибка сети', 'error'); }
 }
 
+// Удаляет QR-код и обновляет зависящие от него разделы.
 async function deleteQr(id) {
   if (!confirm('Удалить QR-код? Если он обозначает коробку, вместе с ней будут удалены изображения, перечень и история. Действие необратимо.')) return;
   try {
@@ -70,7 +76,7 @@ async function deleteQr(id) {
     const data = await res.json();
     if (!res.ok) return toast(data.message || 'Ошибка', 'error');
     toast(data.message);
-    // Обновляем зависимые данные
+    // Обновляем таблицы, в которых могли отображаться связанные с QR данные.
     if (typeof loadInventoryBoxes === 'function') await loadInventoryBoxes();
     if (typeof loadInventoryRuns === 'function') await loadInventoryRuns();
     if (typeof loadSessions === 'function') await loadSessions();
@@ -78,7 +84,7 @@ async function deleteQr(id) {
   } catch (error) { toast('Не удалось удалить QR-код: ' + error.message, 'error'); }
 }
 
-window.qrData = qrData;
+// Внешним обработчикам доступны действия, но не изменяемое состояние списка.
 window.loadQr = loadQr;
 window.editQr = id => { const q = qrData.find(x => x.id === id); if (q) openQrModal(q); };
 window.saveQr = saveQr;

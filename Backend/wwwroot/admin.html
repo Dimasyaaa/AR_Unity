@@ -3,15 +3,15 @@
 	<head>
 		<meta charset="UTF-8">
 			<meta name="viewport" content="width=device-width, initial-scale=1.0">
-				<title>AR Inventory -- Админка</title>
-				<link rel="stylesheet" href="style.css?v=inventory-4">
+				<title>AR Inventory</title>
+				<link rel="stylesheet" href="style.css">
 </head>
 	<body>
 		<div class="container">
 			<header>
 				<div class="brand-lockup">
 					<div class="brand-mark">AR</div>
-					<div><h1>AR Inventory</h1><div class="hint">Рабочее пространство администратора</div></div>
+					<div><h1>AR Inventory</h1><div class="hint">Управление AR-инвентаризацией</div></div>
 				</div>
 				<div class="header-actions">
 					<div class="health-pill" id="api-status"><span class="health-dot"></span><span>Проверяем API…</span></div>
@@ -291,12 +291,14 @@
 
 		<div class="toast" id="toast"></div>
 
+		<!-- Сначала подключаются общие помощники, затем разделы и их обработчики. -->
 		<script src="/js/utils.js"></script>
 		<script src="/js/users.js"></script>
 		<script src="/js/qr.js"></script>
 		<script src="/js/sessions.js"></script>
 		<script src="/js/inventory-runs.js"></script>
 		<script src="/js/inventory-box.js"></script>
+		<script src="/js/inventory-assignments.js"></script>
 		<script src="/js/main.js"></script>
 </body>
 </html>

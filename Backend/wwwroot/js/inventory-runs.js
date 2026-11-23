@@ -1,8 +1,9 @@
-// Просмотр результатов инвентаризаций и сводных таблиц
+// Просмотр проверок отдельных коробок, общих назначений и сводных таблиц.
 let inventoryRunsData = [];
 let inventoryBatchesData = [];
 let inventoryRunsLoadInFlight = false;
 
+// Загружает результаты по отдельным коробкам; затем обновляет сводные назначения.
 async function loadInventoryRuns(silent = false) {
   if (inventoryRunsLoadInFlight) return;
   inventoryRunsLoadInFlight = true;
@@ -22,6 +23,7 @@ async function loadInventoryRuns(silent = false) {
   }
 }
 
+// Загружает список общих инвентаризаций, назначенных сотрудникам.
 async function loadInventoryBatches(silent = false) {
   const tbody = document.getElementById('inventory-batches-body');
   if (!tbody) return; // Если мы не на этой вкладке
@@ -37,6 +39,7 @@ async function loadInventoryBatches(silent = false) {
   }
 }
 
+// Показывает прогресс назначений и ссылку на Excel-выгрузку.
 function renderInventoryBatches() {
   const tbody = document.getElementById('inventory-batches-body');
   if (!inventoryBatchesData.length) {
@@ -62,6 +65,7 @@ function renderInventoryBatches() {
   }).join('');
 }
 
+// Фильтрует результаты и при необходимости группирует их по дате, сотруднику или коробке.
 function renderInventoryRuns() {
   const search = document.getElementById('search-runs')?.value.trim().toLocaleLowerCase('ru-RU') || '';
   const groupBy = document.getElementById('group-runs-by')?.value || 'none';
@@ -95,8 +99,8 @@ function renderInventoryRuns() {
   const groups = new Map();
   rows.forEach(run => {
     let key, title, subtitle = '';
-    if (groupBy === 'date') { key = title = formatDate(run.completedAt); } 
-    else if (groupBy === 'user') { title = run.userFullName || 'Пользователь не указан'; subtitle = run.userDepartment || ''; key = `${title}\u0000${subtitle}`; } 
+    if (groupBy === 'date') { key = title = formatDate(run.completedAt); }
+    else if (groupBy === 'user') { title = run.userFullName || 'Пользователь не указан'; subtitle = run.userDepartment || ''; key = `${title}\u0000${subtitle}`; }
     else { title = run.boxTitle || 'Коробка не указана'; subtitle = run.qrCode || ''; key = `${title}\u0000${subtitle}`; }
     if (!groups.has(key)) groups.set(key, { title, subtitle, runs: [] });
     groups.get(key).runs.push(run);
@@ -111,25 +115,27 @@ function renderInventoryRuns() {
   `).join('');
 }
 
+// Возвращает корректную русскую форму слова «проверка» для счётчика.
 function formatRunCount(count) {
   const lastTwo = count % 100, lastOne = count % 10;
   const word = lastTwo >= 11 && lastTwo <= 14 ? 'проверок' : lastOne === 1 ? 'проверка' : lastOne >= 2 && lastOne <= 4 ? 'проверки' : 'проверок';
   return `${count} ${word}`;
 }
 
+// Загружает подробности одной проверки, включая позиции, заметку и медиафайлы.
 async function showInventoryRun(id) {
   try {
     const res = await fetch(`${API}/api/admin/inventory/runs/${id}`);
     const run = await res.json();
     if (!res.ok) return toast(run.message || 'Не удалось открыть проверку', 'error');
-    
+
     document.getElementById('inventory-run-title').textContent = run.boxTitle || 'Результат инвентаризации';
     document.getElementById('inventory-run-meta').innerHTML = `
       <div><span>Сотрудник</span><strong>${escapeHtml(run.userFullName || '--')}</strong></div>
       <div><span>Отдел</span><strong>${escapeHtml(run.userDepartment || '--')}</strong></div>
       <div><span>QR-код</span><strong><code>${escapeHtml(run.qrCode || '--')}</code></strong></div>
       <div><span>Завершена</span><strong>${formatDateTime(run.completedAt)}</strong></div>`;
-      
+
     document.getElementById('inventory-run-items').innerHTML = (run.items || []).map((item, index) => {
       const actual = Number(item.actualQuantity) || 0, expected = Number(item.expectedQuantity) || 0;
       const status = actual === 0 ? 'Нет' : actual < expected ? 'Частично' : 'Есть';
@@ -141,7 +147,7 @@ async function showInventoryRun(id) {
     const mediaUrl = `${API}/api/admin/inventory/runs/${Number(run.id)}/media`;
     const photoUrls = run.photoUrls?.length ? run.photoUrls : (run.photoUrl ? [`${mediaUrl}/photo`] : []);
     const reportNote = String(run.reportNote || '').trim();
-    
+
     media.innerHTML = [
       reportNote ? `<section class="run-note"><strong>Заметка сотрудника</strong><p>${escapeHtml(reportNote).replace(/\r?\n/g, '<br>')}</p></section>` : '',
       ...photoUrls.map((url, index) => `<figure><figcaption>Фото ${index + 1}</figcaption><a href="${API}${escapeHtml(url)}" target="_blank" rel="noopener"><img src="${API}${escapeHtml(url)}" alt="Фото ${index + 1}"></a></figure>`),
@@ -151,6 +157,7 @@ async function showInventoryRun(id) {
   } catch (error) { toast('Ошибка загрузки проверки: ' + error.message, 'error'); }
 }
 
+// Загружает сводные строки общего назначения для просмотра в модальном окне.
 async function showInventoryBatch(id) {
   try {
     const batch = inventoryBatchesData.find(item => Number(item.id) === Number(id));
@@ -164,7 +171,7 @@ async function showInventoryBatch(id) {
       <div><span>Отдел</span><strong>${escapeHtml(batch?.userDepartment || rows[0]?.userDepartment || '--')}</strong></div>
       <div><span>Начата</span><strong>${formatDateTime(batch?.startedAt)}</strong></div>
       <div><span>Состояние</span><strong>${batch?.status === 'completed' ? 'Завершена' : 'В процессе'}</strong></div>`;
-      
+
     document.getElementById('inventory-batch-rows').innerHTML = rows.map(row => {
       const actual = Number(row.actualQuantity) || 0, expected = Number(row.expectedQuantity) || 0;
       const status = actual === 0 ? 'Нет' : actual < expected ? 'Частично' : 'Есть';
@@ -175,8 +182,7 @@ async function showInventoryBatch(id) {
   } catch (error) { toast('Ошибка загрузки сводной таблицы: ' + error.message, 'error'); }
 }
 
-window.inventoryRunsData = inventoryRunsData;
-window.inventoryBatchesData = inventoryBatchesData;
+// Экспортируем обработчики интерфейса; массивы остаются внутренним состоянием модуля.
 window.loadInventoryRuns = loadInventoryRuns;
 window.loadInventoryBatches = loadInventoryBatches;
 window.showInventoryRun = showInventoryRun;
