@@ -19,4 +19,8 @@
     </None>
   </ItemGroup>
 
+  <ItemGroup>
+    <EmbeddedResource Include="Templates\InventoryOpisTemplate.xlsx" LogicalName="Backend.InventoryOpisTemplate.xlsx" />
+  </ItemGroup>
+
 </Project>

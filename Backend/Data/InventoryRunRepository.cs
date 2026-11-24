@@ -11,7 +11,9 @@ namespace Backend.Data;
 /// <summary>Вложение отчёта вместе с MIME-типом, сохранённым в базе.</summary>
 public sealed record InventoryRunAttachment(byte[] Data, string ContentType);
 public sealed record InventoryBatchExportRow(
-    string BoxTitle, string QrCode, string ItemName,
+    string BoxTitle, string QrCode, string StructuralDivision, string Warehouse,
+    string ItemName, string EnsCode, string AccountCode, string Mol,
+    string StorageLocation, string Unit,
     int ExpectedQuantity, int ActualQuantity, string Status, string Comment,
     string UserFullName, string Department, DateTime CompletedAt);
 
@@ -508,8 +510,14 @@ public class InventoryRunRepository
         await using var cmd = new NpgsqlCommand(@"
             INSERT INTO inventory_run_items
                 (inventory_run_id, box_item_id, item_name_snapshot, status,
-                 expected_quantity_snapshot, actual_quantity, comment)
-            VALUES (@runId, @itemId, @itemName, @status, @expectedQuantity, @actualQuantity, @comment)", conn, tran);
+                 expected_quantity_snapshot, actual_quantity, comment,
+                 structural_division_snapshot, warehouse_snapshot, ens_code_snapshot,
+                 account_code_snapshot, mol_snapshot, storage_location_snapshot, unit_snapshot)
+            SELECT @runId, item.id, @itemName, @status, @expectedQuantity, @actualQuantity, @comment,
+                   item.structural_division, item.warehouse, item.ens_code, item.account_code,
+                   item.mol, item.storage_location, item.unit
+            FROM box_items item
+            WHERE item.id = @itemId", conn, tran);
         
         cmd.Parameters.AddWithValue("runId", runId);
         cmd.Parameters.AddWithValue("itemId", itemId);
@@ -518,7 +526,8 @@ public class InventoryRunRepository
         cmd.Parameters.AddWithValue("expectedQuantity", expectedQuantity);
         cmd.Parameters.AddWithValue("actualQuantity", actualQuantity);
         cmd.Parameters.AddWithValue("comment", string.IsNullOrWhiteSpace(comment) ? (object)DBNull.Value : comment.Trim());
-        await cmd.ExecuteNonQueryAsync();
+        if (await cmd.ExecuteNonQueryAsync() == 0)
+            throw new InvalidOperationException("Не удалось сохранить снимок реквизитов позиции инвентаризации.");
     }
 
     /// <summary>Возвращает строки общей инвентаризации в плоском виде для таблицы и Excel.</summary>
@@ -526,9 +535,18 @@ public class InventoryRunRepository
     {
         await using var conn = await _dataSource.OpenConnectionAsync();
         await using var cmd = new NpgsqlCommand(@"
-            SELECT box.title, qr.code, result.item_name_snapshot,
+            SELECT box.title, qr.code,
+                   COALESCE(result.structural_division_snapshot, ''),
+                   COALESCE(result.warehouse_snapshot, ''),
+                   result.item_name_snapshot,
+                   COALESCE(result.ens_code_snapshot, ''),
+                   COALESCE(result.account_code_snapshot, ''),
+                   COALESCE(result.mol_snapshot, ''),
+                   COALESCE(result.storage_location_snapshot, ''),
+                   COALESCE(result.unit_snapshot, ''),
                    result.expected_quantity_snapshot, result.actual_quantity, result.status,
-                   COALESCE(result.comment, ''), userRow.full_name, userRow.department,
+                   COALESCE(NULLIF(BTRIM(result.comment), ''), NULLIF(BTRIM(run.report_note), ''), ''),
+                   userRow.full_name, userRow.department,
                    run.completed_at
             FROM inventory_runs run
             JOIN inventory_run_items result ON result.inventory_run_id = run.id
@@ -544,10 +562,11 @@ public class InventoryRunRepository
         while (await reader.ReadAsync())
         {
             rows.Add(new InventoryBatchExportRow(
-                reader.GetString(0), reader.GetString(1), reader.GetString(2),
-                reader.GetInt32(3), reader.GetInt32(4), reader.GetString(5),
-                reader.GetString(6), reader.GetString(7), reader.GetString(8),
-                reader.GetDateTime(9)));
+                reader.GetString(0), reader.GetString(1), reader.GetString(2), reader.GetString(3),
+                reader.GetString(4), reader.GetString(5), reader.GetString(6), reader.GetString(7),
+                reader.GetString(8), reader.GetString(9), reader.GetInt32(10), reader.GetInt32(11),
+                reader.GetString(12), reader.GetString(13), reader.GetString(14), reader.GetString(15),
+                reader.GetDateTime(16)));
         }
         return rows;
     }

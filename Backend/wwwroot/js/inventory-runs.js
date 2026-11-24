@@ -172,12 +172,19 @@ async function showInventoryBatch(id) {
       <div><span>Начата</span><strong>${formatDateTime(batch?.startedAt)}</strong></div>
       <div><span>Состояние</span><strong>${batch?.status === 'completed' ? 'Завершена' : 'В процессе'}</strong></div>`;
 
-    document.getElementById('inventory-batch-rows').innerHTML = rows.map(row => {
-      const actual = Number(row.actualQuantity) || 0, expected = Number(row.expectedQuantity) || 0;
-      const status = actual === 0 ? 'Нет' : actual < expected ? 'Частично' : 'Есть';
-      const badge = actual === 0 ? 'badge-danger' : actual < expected ? 'badge-warning' : 'badge-success';
-      return `<tr><td>${escapeHtml(row.boxTitle || '--')}</td><td><code>${escapeHtml(row.qrCode || '--')}</code></td><td>${escapeHtml(row.itemName || '--')}</td><td>${expected}</td><td>${actual}</td><td><span class="badge ${badge}">${status}</span></td><td>${escapeHtml(row.comment || '—')}</td></tr>`;
-    }).join('');
+    document.getElementById('inventory-batch-rows').innerHTML = rows.map(row => `
+      <tr>
+        <td>${escapeHtml(row.structuralDivision || '')}</td>
+        <td>${escapeHtml(row.warehouse || '')}</td>
+        <td>${escapeHtml(row.itemName || '--')}</td>
+        <td>${escapeHtml(row.ensCode || '')}</td>
+        <td>${escapeHtml(row.accountCode || '')}</td>
+        <td>${escapeHtml(row.mol || '')}</td>
+        <td>${escapeHtml(row.storageLocation || '')}</td>
+        <td>${escapeHtml(row.unit || '')}</td>
+        <td>${Number(row.actualQuantity) || 0}</td>
+        <td>${escapeHtml(row.comment || '')}</td>
+      </tr>`).join('');
     document.getElementById('modal-inventory-batch').classList.add('open');
   } catch (error) { toast('Ошибка загрузки сводной таблицы: ' + error.message, 'error'); }
 }

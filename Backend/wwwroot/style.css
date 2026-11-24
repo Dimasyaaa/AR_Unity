@@ -303,6 +303,43 @@ header .hint {
   border-radius: 12px;
 }
 
+/* Редактор бланка сохраняет реквизиты каждой позиции в одной прокручиваемой таблице. */
+.inventory-item-editor-wrap {
+  max-height: 360px;
+  margin: 12px 0;
+}
+
+.inventory-item-editor {
+  min-width: 1680px;
+  width: 100%;
+  table-layout: fixed;
+}
+
+.inventory-item-editor th,
+.inventory-item-editor td {
+  padding: 8px;
+  vertical-align: middle;
+}
+
+.inventory-item-editor input,
+.inventory-item-editor select {
+  min-width: 92px;
+  width: 100%;
+  padding: 8px;
+}
+
+.inventory-item-editor th:nth-child(1) { width: 220px; }
+.inventory-item-editor th:nth-child(2) { width: 130px; }
+.inventory-item-editor th:nth-child(3) { width: 260px; }
+.inventory-item-editor th:nth-child(4),
+.inventory-item-editor th:nth-child(5) { width: 130px; }
+.inventory-item-editor th:nth-child(6) { width: 180px; }
+.inventory-item-editor th:nth-child(7) { width: 210px; }
+.inventory-item-editor th:nth-child(8) { width: 150px; }
+.inventory-item-editor th:nth-child(9) { width: 150px; }
+.inventory-item-editor th:nth-child(10) { width: 130px; }
+.inventory-item-editor th:nth-child(11) { width: 64px; }
+
 table {
   width: 100%;
   border-collapse: collapse;

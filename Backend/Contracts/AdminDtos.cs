@@ -60,6 +60,13 @@ public class AdminChecklistItemDto
     public int sortOrder { get; set; }
     public int expectedQuantity { get; set; } = 1;
     public string modelType { get; set; } = "cube";
+    public string? structuralDivision { get; set; }
+    public string? warehouse { get; set; }
+    public string? ensCode { get; set; }
+    public string? accountCode { get; set; }
+    public string? mol { get; set; }
+    public string? storageLocation { get; set; }
+    public string? unit { get; set; }
 }
 
 /// <summary>Пользователь и выбранные QR-коды для назначенной проверки.</summary>

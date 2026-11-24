@@ -59,6 +59,19 @@ public static class AdminInventoryEndpoints
         .WithSummary("Список QR-кодов и настроенных коробок")
         .Produces(200);
 
+        endpoints.MapGet("/api/admin/inventory/form-options", async (BoxRepository boxes) =>
+        {
+            var options = await boxes.GetInventoryFormOptionsAsync();
+            return Results.Ok(new
+            {
+                structuralDivisions = options.structuralDivisions,
+                warehouses = options.warehouses
+            });
+        })
+        .WithTags("Admin: Inventory")
+        .WithSummary("Подсказки подразделений и складов для формы коробки")
+        .Produces(200);
+
         endpoints.MapGet("/api/admin/inventory/boxes/{qrCodeId:long}", async (long qrCodeId, BoxRepository boxes) =>
         {
             var box = await boxes.GetBoxByQrCodeIdAsync(qrCodeId);
@@ -95,13 +108,26 @@ public static class AdminInventoryEndpoints
                 description = item.description?.Trim() ?? string.Empty,
                 sortOrder = item.sortOrder == 0 ? (index + 1) * 10 : item.sortOrder,
                 expectedQuantity = item.expectedQuantity,
-                modelType = item.modelType
+                modelType = item.modelType,
+                structuralDivision = item.structuralDivision?.Trim(),
+                warehouse = item.warehouse?.Trim(),
+                ensCode = item.ensCode?.Trim(),
+                accountCode = item.accountCode?.Trim(),
+                mol = item.mol?.Trim(),
+                storageLocation = item.storageLocation?.Trim(),
+                unit = item.unit?.Trim()
             }).ToList();
 
             if (cleanedItems.Any(item => string.IsNullOrWhiteSpace(item.name)))
                 return Results.BadRequest(new { message = "У каждого пункта должно быть название" });
             if (cleanedItems.Any(item => item.expectedQuantity is < 1 or > 100000))
                 return Results.BadRequest(new { message = "Учётное количество каждой позиции должно быть от 1 до 100000" });
+            if (cleanedItems.Any(item => new[]
+                {
+                    item.structuralDivision, item.warehouse, item.ensCode, item.accountCode,
+                    item.mol, item.storageLocation, item.unit
+                }.Any(value => value?.Length > 200)))
+                return Results.BadRequest(new { message = "Значения полей бланка не должны превышать 200 символов." });
             if (cleanedItems.GroupBy(item => item.name, StringComparer.OrdinalIgnoreCase).Any(g => g.Count() > 1))
                 return Results.BadRequest(new { message = "Названия позиций в одной коробке не должны повторяться." });
 

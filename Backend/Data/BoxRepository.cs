@@ -44,7 +44,10 @@ public sealed class BoxRepository
     {
         await using var connection = await _dataSource.OpenConnectionAsync();
         await using var command = new NpgsqlCommand(@"
-            SELECT id, name, COALESCE(description, ''), sort_order, expected_quantity, model_type
+            SELECT id, name, COALESCE(description, ''), sort_order, expected_quantity, model_type,
+                   COALESCE(structural_division, ''), COALESCE(warehouse, ''),
+                   COALESCE(ens_code, ''), COALESCE(account_code, ''), COALESCE(mol, ''),
+                   COALESCE(storage_location, ''), COALESCE(unit, '')
             FROM box_items
             WHERE box_id = @boxId AND is_active = TRUE
             ORDER BY sort_order, id", connection);
@@ -61,7 +64,14 @@ public sealed class BoxRepository
                 description = reader.GetString(2),
                 sortOrder = reader.GetInt32(3),
                 expectedQuantity = reader.GetInt32(4),
-                modelType = reader.GetString(5)
+                modelType = reader.GetString(5),
+                structuralDivision = reader.GetString(6),
+                warehouse = reader.GetString(7),
+                ensCode = reader.GetString(8),
+                accountCode = reader.GetString(9),
+                mol = reader.GetString(10),
+                storageLocation = reader.GetString(11),
+                unit = reader.GetString(12)
             });
         }
         return items;
@@ -177,6 +187,40 @@ public sealed class BoxRepository
         return boxes;
     }
 
+    /// <summary>Возвращает сохранённые значения подразделений и складов для подсказок формы.</summary>
+    public async Task<(string[] structuralDivisions, string[] warehouses)> GetInventoryFormOptionsAsync()
+    {
+        var structuralDivisions = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "СКЛ_147_ЦАП" };
+        var warehouses = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "0147" };
+
+        await using var connection = await _dataSource.OpenConnectionAsync();
+        await using (var divisionsCommand = new NpgsqlCommand(@"
+            SELECT DISTINCT BTRIM(structural_division)
+            FROM box_items
+            WHERE NULLIF(BTRIM(structural_division), '') IS NOT NULL
+            ORDER BY 1", connection))
+        await using (var reader = await divisionsCommand.ExecuteReaderAsync())
+        {
+            while (await reader.ReadAsync())
+                structuralDivisions.Add(reader.GetString(0));
+        }
+
+        await using (var warehousesCommand = new NpgsqlCommand(@"
+            SELECT DISTINCT BTRIM(warehouse)
+            FROM box_items
+            WHERE NULLIF(BTRIM(warehouse), '') IS NOT NULL
+            ORDER BY 1", connection))
+        await using (var reader = await warehousesCommand.ExecuteReaderAsync())
+        {
+            while (await reader.ReadAsync())
+                warehouses.Add(reader.GetString(0));
+        }
+
+        return (
+            structuralDivisions.OrderBy(value => value, StringComparer.OrdinalIgnoreCase).ToArray(),
+            warehouses.OrderBy(value => value, StringComparer.OrdinalIgnoreCase).ToArray());
+    }
+
     /// <summary>Возвращает коробку, найденную по идентификатору её QR-кода.</summary>
     public async Task<(long boxId, string code, string objectName, string title,
         bool photoAvailable, string? modelFileName)?> GetBoxByQrCodeIdAsync(long qrCodeId)
@@ -274,7 +318,10 @@ public sealed class BoxRepository
                 await using var updateItem = new NpgsqlCommand(@"
                     UPDATE box_items
                     SET name = @name, description = @description, sort_order = @sortOrder,
-                        expected_quantity = @expectedQuantity, model_type = @modelType, is_active = TRUE
+                        expected_quantity = @expectedQuantity, model_type = @modelType,
+                        structural_division = @structuralDivision, warehouse = @warehouse,
+                        ens_code = @ensCode, account_code = @accountCode, mol = @mol,
+                        storage_location = @storageLocation, unit = @unit, is_active = TRUE
                     WHERE id = @id AND box_id = @boxId", connection, transaction);
                 updateItem.Parameters.AddWithValue("id", item.id);
                 updateItem.Parameters.AddWithValue("boxId", boxId);
@@ -289,14 +336,10 @@ public sealed class BoxRepository
             {
                 await using var insertItem = new NpgsqlCommand(@"
                     INSERT INTO box_items
-                        (box_id, name, description, sort_order, is_active, expected_quantity, model_type)
-                    VALUES (@boxId, @name, @description, @sortOrder, TRUE, @expectedQuantity, @modelType)
-                    ON CONFLICT (box_id, name) DO UPDATE SET
-                        description = EXCLUDED.description,
-                        sort_order = EXCLUDED.sort_order,
-                        expected_quantity = EXCLUDED.expected_quantity,
-                        model_type = EXCLUDED.model_type,
-                        is_active = TRUE", connection, transaction);
+                        (box_id, name, description, sort_order, is_active, expected_quantity, model_type,
+                         structural_division, warehouse, ens_code, account_code, mol, storage_location, unit)
+                    VALUES (@boxId, @name, @description, @sortOrder, TRUE, @expectedQuantity, @modelType,
+                            @structuralDivision, @warehouse, @ensCode, @accountCode, @mol, @storageLocation, @unit)", connection, transaction);
                 insertItem.Parameters.AddWithValue("boxId", boxId);
                 AddChecklistParameters(insertItem, item);
                 await insertItem.ExecuteNonQueryAsync();
@@ -338,6 +381,20 @@ public sealed class BoxRepository
         command.Parameters.AddWithValue("sortOrder", item.sortOrder);
         command.Parameters.AddWithValue("expectedQuantity", Math.Max(1, item.expectedQuantity));
         command.Parameters.AddWithValue("modelType", NormalizeModelType(item.modelType));
+        AddOptionalText(command, "structuralDivision", item.structuralDivision);
+        AddOptionalText(command, "warehouse", item.warehouse);
+        AddOptionalText(command, "ensCode", item.ensCode);
+        AddOptionalText(command, "accountCode", item.accountCode);
+        AddOptionalText(command, "mol", item.mol);
+        AddOptionalText(command, "storageLocation", item.storageLocation);
+        AddOptionalText(command, "unit", item.unit);
+    }
+
+    // Пустые реквизиты формы хранятся как NULL, чтобы администратор мог заполнить их позже.
+    private static void AddOptionalText(NpgsqlCommand command, string name, string? value)
+    {
+        command.Parameters.Add(name, NpgsqlDbType.Text).Value =
+            string.IsNullOrWhiteSpace(value) ? DBNull.Value : value.Trim();
     }
 
     /// <summary>Оставляет только поддерживаемые типы тестовых фигур.</summary>

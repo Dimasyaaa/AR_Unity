@@ -5,29 +5,91 @@ const photosMarkedForRemoval = new Set();
 let removeCurrentModel = false;
 let inventoryPhotoDrafts = [];
 let nextInventoryPhotoKey = 1;
+const inventoryModelTypes = ['cube', 'sphere', 'cylinder', 'cone', 'capsule'];
+let inventoryFormOptions = {
+  structuralDivisions: ['СКЛ_147_ЦАП'],
+  warehouses: ['0147']
+};
 
-// Разбирает строки вида «название | количество | тип модели» из текстового поля.
-function parseInventoryItemLines(value) {
-  return value.split(/\r?\n/).map(line => {
-    const trimmed = line.trim();
-    if (!trimmed) return null;
-    const [rawName, rawQuantity, rawModelType] = trimmed.split('|');
-    const quantity = rawQuantity === undefined ? 1 : Number(rawQuantity.trim());
-    const modelType = (rawModelType || 'cube').trim().toLowerCase();
-    return {
-      name: rawName.trim(),
-      expectedQuantity: Number.isInteger(quantity) && quantity > 0 ? quantity : 0,
-      modelType: ['cube', 'sphere', 'cylinder', 'cone', 'capsule'].includes(modelType) ? modelType : 'cube'
-    };
-  }).filter(Boolean);
+// Рисует редактируемые строки бланка; ID остаётся скрытым ключом при изменении названия.
+function renderInventoryItemRows(items = []) {
+  const body = document.getElementById('inventory-items-body');
+  if (!body) return;
+  body.innerHTML = '';
+  const rows = items.length ? items : [{}];
+  rows.forEach(item => addInventoryItemRow(item));
 }
 
-// Показывает предварительный список позиций до сохранения коробки.
-function renderInventoryItemsPreview() {
-  const preview = document.getElementById('inventory-items-preview');
-  if (!preview) return;
-  const items = parseInventoryItemLines(document.getElementById('inventory-items').value);
-  preview.innerHTML = items.map(item => `<li>${escapeHtml(item.name)} <span class="hint">· по учёту: ${item.expectedQuantity} · 3D: ${escapeHtml(item.modelType)}</span></li>`).join('') || '<li class="checklist-preview-empty">Позиции появятся здесь в указанном порядке</li>';
+// Добавляет одну строку с реквизитами позиции и тестовой 3D-фигурой.
+function addInventoryItemRow(item = {}) {
+  const body = document.getElementById('inventory-items-body');
+  if (!body) return;
+  const modelType = inventoryModelTypes.includes(item.modelType) ? item.modelType : 'cube';
+  const modelOptions = inventoryModelTypes.map(type =>
+    `<option value="${type}" ${type === modelType ? 'selected' : ''}>${type}</option>`).join('');
+  body.insertAdjacentHTML('beforeend', `
+    <tr data-inventory-item data-id="${Number(item.id) || 0}">
+      <td><input data-field="structuralDivision" type="text" list="inventory-division-options" value="${escapeHtml(item.structuralDivision || '')}" placeholder="СКЛ_147_ЦАП" maxlength="200"></td>
+      <td><input data-field="warehouse" type="text" list="inventory-warehouse-options" value="${escapeHtml(item.warehouse || '')}" placeholder="0147" maxlength="200"></td>
+      <td><input data-field="name" type="text" value="${escapeHtml(item.name || '')}" placeholder="Наименование" maxlength="200"></td>
+      <td><input data-field="ensCode" type="text" value="${escapeHtml(item.ensCode || '')}" placeholder="ЕНС" maxlength="200"></td>
+      <td><input data-field="accountCode" type="text" value="${escapeHtml(item.accountCode || '')}" placeholder="Счёт" maxlength="200"></td>
+      <td><input data-field="mol" type="text" value="${escapeHtml(item.mol || '')}" placeholder="МОЛ" maxlength="200"></td>
+      <td><input data-field="storageLocation" type="text" value="${escapeHtml(item.storageLocation || '')}" placeholder="1СТЕЛЛАЖ_2ПОЛКА" maxlength="200"></td>
+      <td><input data-field="unit" type="text" value="${escapeHtml(item.unit || '')}" placeholder="ШТ" maxlength="200"></td>
+      <td><input data-field="expectedQuantity" type="number" min="1" max="100000" step="1" value="${Number(item.expectedQuantity) || 1}"></td>
+      <td><select data-field="modelType">${modelOptions}</select></td>
+      <td><button type="button" class="btn btn-danger btn-sm" data-remove-inventory-item aria-label="Удалить позицию">×</button></td>
+    </tr>`);
+}
+
+// Загружает сохранённые значения и объединяет их с начальными подсказками формы.
+async function loadInventoryFormOptions() {
+  try {
+    const response = await fetch(`${API}/api/admin/inventory/form-options`);
+    if (!response.ok) throw new Error('Не удалось загрузить подсказки');
+    const data = await response.json();
+    inventoryFormOptions = {
+      structuralDivisions: [...new Set(['СКЛ_147_ЦАП', ...(data.structuralDivisions || [])])],
+      warehouses: [...new Set(['0147', ...(data.warehouses || [])])]
+    };
+  } catch {
+    // Начальные значения доступны и при временной ошибке загрузки справочника.
+  }
+  renderInventoryFormOptions();
+}
+
+// Обновляет подсказки в полях; свободный ввод остаётся разрешённым.
+function renderInventoryFormOptions() {
+  const setOptions = (id, values) => {
+    const list = document.getElementById(id);
+    if (list) list.innerHTML = values.map(value => `<option value="${escapeHtml(value)}"></option>`).join('');
+  };
+  setOptions('inventory-division-options', inventoryFormOptions.structuralDivisions);
+  setOptions('inventory-warehouse-options', inventoryFormOptions.warehouses);
+}
+
+// Считывает значения из таблицы формы перед отправкой карточки на сервер.
+function readInventoryItemRows() {
+  const body = document.getElementById('inventory-items-body');
+  if (!body) return [];
+  return [...body.querySelectorAll('[data-inventory-item]')].map((row, index) => {
+    const value = field => row.querySelector(`[data-field="${field}"]`)?.value?.trim() || '';
+    return {
+      id: Number(row.dataset.id) || 0,
+      name: value('name'),
+      expectedQuantity: Number(value('expectedQuantity')),
+      structuralDivision: value('structuralDivision'),
+      warehouse: value('warehouse'),
+      ensCode: value('ensCode'),
+      accountCode: value('accountCode'),
+      mol: value('mol'),
+      storageLocation: value('storageLocation'),
+      unit: value('unit'),
+      modelType: value('modelType') || 'cube',
+      sortOrder: (index + 1) * 10
+    };
+  });
 }
 
 // Загружает список QR-кодов и настроенных для них коробок.
@@ -114,12 +176,12 @@ async function openInventoryBox(qrCodeId) {
     const response = await fetch(`${API}/api/admin/inventory/boxes/${qrCodeId}`);
     const data = await response.json();
     if (!response.ok) throw new Error(data.message || 'Не удалось загрузить коробку');
+    await loadInventoryFormOptions();
     inventoryCurrent = data;
     document.getElementById('inventory-qr-id').value = qrCodeId;
     document.getElementById('inventory-qr-code').value = data.qrCode;
     document.getElementById('inventory-title').value = data.title;
-    document.getElementById('inventory-items').value = data.items.map(item => `${item.name} | ${Number(item.expectedQuantity) || 1} | ${item.modelType || 'cube'}`).join('\n');
-    renderInventoryItemsPreview();
+    renderInventoryItemRows(data.items || []);
     photosMarkedForRemoval.clear();
     inventoryPhotoDrafts.forEach(draft => { if (draft.previewUrl) URL.revokeObjectURL(draft.previewUrl); });
     inventoryPhotoDrafts = (data.photos || []).filter(photo => Number(photo.pageNumber) > 0).map(photo => ({
@@ -225,19 +287,15 @@ function toggleRemoveModel() {
 async function saveInventoryBox() {
   const qrCodeId = document.getElementById('inventory-qr-id').value;
   const title = document.getElementById('inventory-title').value.trim();
-  const items = parseInventoryItemLines(document.getElementById('inventory-items').value);
+  const items = readInventoryItemRows();
   if (!title) return toast('Укажите название коробки', 'error');
   if (!items.length) return toast('Добавьте хотя бы одну позицию', 'error');
   if (items.some(item => !item.name || item.expectedQuantity < 1)) return toast('Для каждой позиции укажите название и целое количество > 0', 'error');
   if (new Set(items.map(item => item.name.toLocaleLowerCase('ru-RU'))).size !== items.length) return toast('Удалите повторяющиеся названия позиций', 'error');
 
-  const previous = new Map((inventoryCurrent?.items || []).map(item => [item.name.toLocaleLowerCase('ru-RU'), item]));
   const body = {
     title, photos: [], removePhotoPages: Array.from(photosMarkedForRemoval), removeModel: removeCurrentModel,
-    items: items.map((item, index) => ({
-      id: previous.get(item.name.toLocaleLowerCase('ru-RU'))?.id || 0, name: item.name, expectedQuantity: item.expectedQuantity,
-      modelType: item.modelType || previous.get(item.name.toLocaleLowerCase('ru-RU'))?.modelType || 'cube', sortOrder: (index + 1) * 10
-    }))
+    items
   };
   for (const draft of inventoryPhotoDrafts) {
     if (!draft.file) continue;
@@ -260,6 +318,7 @@ async function saveInventoryBox() {
     const data = await response.json();
     if (!response.ok) return toast(data.message || 'Не удалось сохранить коробку', 'error');
     toast(data.message || 'Данные коробки сохранены');
+    await loadInventoryFormOptions();
     closeModal('modal-inventory');
     await loadInventoryBoxes();
   } catch (error) { toast('Ошибка сети: ' + error.message, 'error'); }
@@ -278,11 +337,14 @@ window.removeInventoryPhotoInput = removeInventoryPhotoInput;
 window.selectInventoryPhoto = selectInventoryPhoto;
 window.toggleRemoveModel = toggleRemoveModel;
 window.saveInventoryBox = saveInventoryBox;
-window.parseInventoryItemLines = parseInventoryItemLines;
-window.renderInventoryItemsPreview = renderInventoryItemsPreview;
+window.addInventoryItemRow = addInventoryItemRow;
+window.loadInventoryFormOptions = loadInventoryFormOptions;
 
 document.getElementById('search-inventory')?.addEventListener('input', renderInventoryBoxes);
-document.getElementById('inventory-items')?.addEventListener('input', renderInventoryItemsPreview);
+document.getElementById('inventory-items-body')?.addEventListener('click', event => {
+  const removeButton = event.target.closest('[data-remove-inventory-item]');
+  if (removeButton) removeButton.closest('[data-inventory-item]')?.remove();
+});
 document.getElementById('inventory-model')?.addEventListener('change', event => {
   const file = event.target.files[0];
   if (!file) return;

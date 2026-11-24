@@ -230,11 +230,19 @@
 					<button type="button" class="btn btn-secondary btn-sm" onclick="addInventoryPhotoInput()">Добавить изображение</button>
 				</div>
 				<div class="form-group">
-					<label>Позиции — одна на строку</label>
-					<textarea id="inventory-items" rows="10" placeholder="Веник | 1&#10;Швабра | 2&#10;Ведро | 1"></textarea>
-					<div class="hint">Формат: название | количество по учёту | тип 3D-модели. Например: Куб | 2 | cube. Типы: cube, sphere, cylinder, cone, capsule. Количество и отметки «Есть / Нет» отдельно попадут в итоговую таблицу.</div>
-					<ol id="inventory-items-preview" class="checklist-preview" aria-live="polite"></ol>
-					<div class="hint">После сохранения приложение получит обновлённый перечень при синхронизации или экспорте локальной базы.</div>
+					<label>Строки бланка подсчёта</label>
+					<datalist id="inventory-division-options"><option value="СКЛ_147_ЦАП"></option></datalist>
+					<datalist id="inventory-warehouse-options"><option value="0147"></option></datalist>
+					<div class="table-wrap inventory-item-editor-wrap">
+						<table class="inventory-item-editor">
+							<thead><tr><th>Структурное подразделение</th><th>Склад</th><th>Наименование материальных ценностей</th><th>ЕНС</th><th>Счёт</th><th>МОЛ</th><th>Место хранения</th><th>Единица измерения</th><th>Количество по учёту</th><th>3D-модель</th><th></th></tr></thead>
+							<tbody id="inventory-items-body"></tbody>
+						</table>
+					</div>
+					<button type="button" class="btn btn-secondary btn-sm" onclick="addInventoryItemRow()">Добавить позицию</button>
+					<div class="hint">Здесь заполняются исходные реквизиты и учётное количество. Фактическое количество вводится сотрудником при проверке; примечание попадёт из распознанной голосовой заметки отчёта.</div>
+					<div class="hint">Структурное подразделение и склад можно выбрать из подсказок или ввести вручную. После сохранения новые значения появятся в подсказках. ЕНС, счёт, МОЛ и остальные поля также заполняются вручную.</div>
+					<div class="hint">3D-тип нужен только для тестовых примитивов: cube, sphere, cylinder, cone, capsule.</div>
 				</div>
 				<div class="form-group">
 					<label>3D-модель содержимого (GLB, до 20 МБ)</label>
@@ -284,7 +292,7 @@
 			<div class="modal modal-wide">
 				<div class="modal-title-row"><div><span class="eyebrow">СВОДНЫЙ ОТЧЁТ</span><h3 id="inventory-batch-title">Общая инвентаризация</h3></div><button class="icon-button" onclick="closeModal('modal-inventory-batch')" aria-label="Закрыть">×</button></div>
 				<div id="inventory-batch-meta" class="run-meta"></div>
-				<div class="table-wrap"><table class="run-items-table"><thead><tr><th>Коробка</th><th>QR-код</th><th>Позиция</th><th>По учёту</th><th>Фактически</th><th>Статус</th><th>Комментарий</th></tr></thead><tbody id="inventory-batch-rows"></tbody></table></div>
+				<div class="table-wrap"><table class="run-items-table"><thead><tr><th>Структурное подразделение</th><th>Склад</th><th>Наименование материальных ценностей</th><th>ЕНС</th><th>Счёт</th><th>МОЛ</th><th>Место хранения</th><th>Единица</th><th>Количество</th><th>Примечание</th></tr></thead><tbody id="inventory-batch-rows"></tbody></table></div>
 				<div class="modal-actions"><button class="btn btn-secondary" onclick="closeModal('modal-inventory-batch')">Закрыть</button></div>
 			</div>
 		</div>
