@@ -316,7 +316,7 @@ public class MainMenuManager : MonoBehaviour
         {
             int completed = database.GetCompletedBoxCount(active.client_batch_id);
             int remaining = Mathf.Max(0, active.expected_box_count - completed);
-            SetBatchMessage($"Коробки: проверено {completed} / {active.expected_box_count} · осталось {remaining}");
+            SetBatchMessage($"На вас назначена инвентаризация!!! \n Коробки: проверено {completed} / {active.expected_box_count} · осталось {remaining}");
             return;
         }
 
