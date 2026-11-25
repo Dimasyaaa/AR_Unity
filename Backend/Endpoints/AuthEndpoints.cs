@@ -28,7 +28,7 @@ public static class AuthEndpoints
                 return Results.Json(new { success = false, message = "Неверный отдел, ФИО или пароль" }, statusCode: 401);
             }
 
-            // 3. Явно распаковываем кортеж (это убирает ошибки CS1061)
+            // 3. Явно распаковываем кортеж 
             var (id, fullName, department) = userResult.Value;
 
             // 4. Используем распакованные переменные

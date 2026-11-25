@@ -38,7 +38,6 @@ function addInventoryItemRow(item = {}) {
       <td><input data-field="storageLocation" type="text" value="${escapeHtml(item.storageLocation || '')}" placeholder="1СТЕЛЛАЖ_2ПОЛКА" maxlength="200"></td>
       <td><input data-field="unit" type="text" value="${escapeHtml(item.unit || '')}" placeholder="ШТ" maxlength="200"></td>
       <td><input data-field="expectedQuantity" type="number" min="1" max="100000" step="1" value="${Number(item.expectedQuantity) || 1}"></td>
-      <td><select data-field="modelType">${modelOptions}</select></td>
       <td><button type="button" class="btn btn-danger btn-sm" data-remove-inventory-item aria-label="Удалить позицию">×</button></td>
     </tr>`);
 }

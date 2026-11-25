@@ -4834,11 +4834,11 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 86a6faafd5de1fa49a8bef9c2b90ee6b, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::QRScanner
-  editorTestQrCode: test_box_02
+  editorTestQrCode: 123
   editorTestQrCodes:
-  - test_box_02
-  - test_box_02
-  - test_box_03
+  - 123
+  - 1234
+  - 12345
   - test_box_04
   - test_box_05
   editorTestQrCodeIndex: 0
