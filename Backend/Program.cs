@@ -28,6 +28,7 @@ builder.Services.AddScoped<QrDeletionRepository>();
 builder.Services.AddScoped<BoxRepository>();
 builder.Services.AddScoped<InventoryRunRepository>();
 builder.Services.AddScoped<InventorySyncService>();
+builder.Services.AddScoped<InventoryImportService>();
 
 // 4. Swagger и CORS
 builder.Services.AddEndpointsApiExplorer();

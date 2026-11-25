@@ -25,14 +25,17 @@ public class MainMenuManager : MonoBehaviour
     /// <summary>Обновляет подпись пользователя при открытии меню.</summary>
     private void Start()
     {
-        // Гарантируем наличие локального клиента, если меню запустили отдельно в Editor.
+        // При запуске без LoginScene создаём базу прямо из главного меню.
+        LocalDatabase.GetOrCreate();
         LocalClient.GetOrCreate();
 
         if (userInfoText != null)
         {
-            userInfoText.text = SessionManager.IsLoggedIn
-                ? $"Пользователь: {SessionManager.FullName}"
-                : "Пользователь: не авторизован";
+            userInfoText.text = SessionManager.AuthenticationEnabled
+                ? SessionManager.IsLoggedIn
+                    ? $"Пользователь: {SessionManager.FullName}"
+                    : "Пользователь: не авторизован"
+                : "Общий режим — без авторизации";
         }
 
         if (batchSummaryPanel != null)
@@ -117,7 +120,9 @@ public class MainMenuManager : MonoBehaviour
                     return;
                 }
 
-                SetBatchMessage("Нет активного назначения от администратора. Подключитесь к серверу и попросите назначить коробки.");
+                SetBatchMessage(SessionManager.AuthenticationEnabled
+                    ? "Нет активного назначения от администратора. Подключитесь к серверу и попросите назначить коробки."
+                    : "Активная опись не найдена. Загрузите и запустите её в панели администратора.");
                 Debug.LogWarning("[Menu] Не удалось получить назначение: " + error);
             });
     }
@@ -125,6 +130,13 @@ public class MainMenuManager : MonoBehaviour
     /// <summary>Открывает отдельный экран активного назначения и истории сотрудника.</summary>
     public void OpenInventorySelection()
     {
+        // В общем режиме не показываем экран сотрудника, а сразу открываем сканер описи.
+        if (!SessionManager.AuthenticationEnabled)
+        {
+            StartQrScan();
+            return;
+        }
+
         if (!SessionManager.IsLoggedIn)
         {
             SetBatchMessage("Сначала войдите в систему.");
@@ -249,13 +261,13 @@ public class MainMenuManager : MonoBehaviour
             : null;
         if (batch == null)
         {
-            ShowQrRejection("Нет активного назначения коробок. Вернитесь в меню и проверьте назначение у администратора.");
+            ShowQrRejection("Нет активной описи. Вернитесь в меню и проверьте её в панели администратора.");
             return;
         }
 
         if (!database.IsQrAssignedToBatch(batch.client_batch_id, qrData))
         {
-            ShowQrRejection($"QR «{qrData}» не входит в ваше назначение. Отсканируйте назначенную коробку.");
+            ShowQrRejection($"QR «{qrData}» не входит в активную опись. Отсканируйте QR-код из неё.");
             return;
         }
 
@@ -316,7 +328,7 @@ public class MainMenuManager : MonoBehaviour
         {
             int completed = database.GetCompletedBoxCount(active.client_batch_id);
             int remaining = Mathf.Max(0, active.expected_box_count - completed);
-            SetBatchMessage($"На вас назначена инвентаризация!!! \n Коробки: проверено {completed} / {active.expected_box_count} · осталось {remaining}");
+            SetBatchMessage($"Активная инвентаризация: проверено {completed} / {active.expected_box_count} · осталось {remaining}");
             return;
         }
 
@@ -340,7 +352,9 @@ public class MainMenuManager : MonoBehaviour
 
         if (userInfoText != null)
             userInfoText.text = SessionManager.IsLoggedIn
-                ? $"Пользователь: {SessionManager.FullName}\n{text}"
+                ? SessionManager.AuthenticationEnabled
+                    ? $"Пользователь: {SessionManager.FullName}\n{text}"
+                    : $"Общий терминал\n{text}"
                 : text;
     }
 

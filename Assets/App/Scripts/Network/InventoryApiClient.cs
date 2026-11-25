@@ -232,7 +232,10 @@ namespace ArInventory.Network
         private static IEnumerator GetActiveAssignmentRoutine(long userId,
             Action<InventoryAssignmentResponse> onSuccess, Action<string> onError)
         {
-            string url = $"{BaseUrl}/api/inventory/assignments/{userId}/active";
+            // Без авторизации запрашиваем единственную общую опись без идентификатора сотрудника.
+            string url = SessionManager.AuthenticationEnabled
+                ? $"{BaseUrl}/api/inventory/assignments/{userId}/active"
+                : $"{BaseUrl}/api/inventory/assignments/active";
             using (var request = UnityWebRequest.Get(url))
             {
                 request.timeout = 10;

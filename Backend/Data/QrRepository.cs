@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 using Backend.Contracts;   // QrDto
+using Backend.Helpers;
 using Npgsql;
 
 namespace Backend.Data;
@@ -32,10 +33,15 @@ public class QrRepository
         await using var reader = await cmd.ExecuteReaderAsync();
         while (await reader.ReadAsync())
         {
+            string code = reader.GetString(1);
+            bool isInventoryCode = QrHelper.TryParseInventoryPayload(code, out string ensCode, out int accountingQuantity);
             items.Add(new
             {
                 id = reader.GetInt64(0),
-                code = reader.GetString(1),
+                code,
+                ensCode = isInventoryCode ? ensCode : null,
+                accountingQuantity = isInventoryCode ? accountingQuantity : (int?)null,
+                isInventoryCode,
                 objectName = reader.GetString(2),
                 isActive = reader.GetBoolean(3),
                 createdAt = reader.GetDateTime(4)
@@ -61,6 +67,16 @@ public class QrRepository
         if (!await reader.ReadAsync())
             return null;
         return (reader.GetInt64(0), reader.GetString(1));
+    }
+
+    /// <summary>Возвращает сохранённое значение QR по его идентификатору для генерации изображения.</summary>
+    public async Task<string?> GetCodeByIdAsync(long id)
+    {
+        await using var conn = await _dataSource.OpenConnectionAsync();
+        await using var cmd = new NpgsqlCommand(
+            "SELECT code FROM qr_codes WHERE id = @id AND is_active = TRUE", conn);
+        cmd.Parameters.AddWithValue("id", id);
+        return await cmd.ExecuteScalarAsync() as string;
     }
 
     /// <summary>

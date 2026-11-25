@@ -1,9 +1,9 @@
-// Просмотр проверок отдельных коробок, общих назначений и сводных таблиц.
+// Просмотр активных описей, результатов проверок и итоговых Excel-файлов.
 let inventoryRunsData = [];
 let inventoryBatchesData = [];
 let inventoryRunsLoadInFlight = false;
 
-// Загружает результаты по отдельным коробкам; затем обновляет сводные назначения.
+// Загружает результаты по позициям МТР и обновляет сводки описи.
 async function loadInventoryRuns(silent = false) {
   if (inventoryRunsLoadInFlight) return;
   inventoryRunsLoadInFlight = true;
@@ -16,14 +16,14 @@ async function loadInventoryRuns(silent = false) {
     renderInventoryRuns();
     if (typeof loadInventoryBatches === 'function') await loadInventoryBatches(true);
   } catch (error) {
-    if (tbody) tbody.innerHTML = `<tr><td colspan="6" class="empty">${escapeHtml(error.message)}</td></tr>`;
+    if (tbody) tbody.innerHTML = `<tr><td colspan="4" class="empty">${escapeHtml(error.message)}</td></tr>`;
     if (!silent) toast('Не удалось загрузить результаты инвентаризации', 'error');
   } finally {
     inventoryRunsLoadInFlight = false;
   }
 }
 
-// Загружает список общих инвентаризаций, назначенных сотрудникам.
+// Загружает историю инвентаризаций, загруженных в AR-приложение.
 async function loadInventoryBatches(silent = false) {
   const tbody = document.getElementById('inventory-batches-body');
   if (!tbody) return; // Если мы не на этой вкладке
@@ -34,38 +34,37 @@ async function loadInventoryBatches(silent = false) {
     inventoryBatchesData = Array.isArray(data) ? data : (data.items || []);
     renderInventoryBatches();
   } catch (error) {
-    tbody.innerHTML = `<tr><td colspan="6" class="empty">${escapeHtml(error.message)}</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="5" class="empty">${escapeHtml(error.message)}</td></tr>`;
     if (!silent) toast('Не удалось загрузить общие проверки', 'error');
   }
 }
 
-// Показывает прогресс назначений и ссылку на Excel-выгрузку.
+// Показывает прогресс каждой описи и ссылку на итоговый Excel.
 function renderInventoryBatches() {
   const tbody = document.getElementById('inventory-batches-body');
   if (!inventoryBatchesData.length) {
-    tbody.innerHTML = '<tr><td colspan="6" class="empty">Пока нет общих инвентаризаций коробок.</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="5" class="empty">Пока нет загруженных описей.</td></tr>';
     return;
   }
   tbody.innerHTML = inventoryBatchesData.map(batch => {
-    const completed = Number(batch.completedBoxCount) || 0;
-    const expected = Number(batch.expectedBoxCount) || 0;
+    const completed = Number(batch.completedPositionCount) || 0;
+    const expected = Number(batch.expectedPositionCount) || 0;
     const done = batch.status === 'completed';
     const assigned = batch.status === 'assigned';
     return `<tr>
       <td>${formatDateTime(batch.completedAt || batch.startedAt)}</td>
-      <td>${escapeHtml(batch.userFullName || '--')}</td>
-      <td>${escapeHtml(batch.userDepartment || '--')}</td>
+      <td><strong>${escapeHtml(batch.title || 'Опись')}</strong></td>
       <td>${completed} / ${expected}</td>
-      <td><span class="badge ${done ? 'badge-success' : 'badge-warning'}">${done ? 'Завершена' : assigned ? 'Назначена' : 'В процессе'}</span></td>
+      <td><span class="badge ${done ? 'badge-success' : 'badge-warning'}">${done ? 'Завершена' : assigned ? 'Готова к работе в приложении' : 'В процессе'}</span></td>
       <td class="row-actions">
         <button class="btn btn-secondary btn-sm" onclick="showInventoryBatch(${Number(batch.id)})">Сводка</button>
-        <a class="btn btn-primary btn-sm" href="${API}/api/admin/inventory/batches/${Number(batch.id)}/excel">Excel</a>
+        ${done ? `<a class="btn btn-primary btn-sm" href="${API}/api/admin/inventory/batches/${Number(batch.id)}/excel">Excel</a>` : ''}
       </td>
     </tr>`;
   }).join('');
 }
 
-// Фильтрует результаты и при необходимости группирует их по дате, сотруднику или коробке.
+// Фильтрует результаты и при необходимости группирует их по дате или позиции МТР.
 function renderInventoryRuns() {
   const search = document.getElementById('search-runs')?.value.trim().toLocaleLowerCase('ru-RU') || '';
   const groupBy = document.getElementById('group-runs-by')?.value || 'none';
@@ -73,19 +72,17 @@ function renderInventoryRuns() {
   if (!tbody) return;
 
   const rows = inventoryRunsData.filter(run =>
-    [run.userFullName, run.userDepartment, run.boxTitle, run.qrCode].some(value => String(value || '').toLocaleLowerCase('ru-RU').includes(search))
+    [run.boxTitle, run.qrCode].some(value => String(value || '').toLocaleLowerCase('ru-RU').includes(search))
   );
 
   if (!rows.length) {
-    tbody.innerHTML = `<tr><td colspan="6" class="empty">${inventoryRunsData.length ? 'По запросу ничего не найдено' : 'Пока нет завершённых проверок.'}</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="4" class="empty">${inventoryRunsData.length ? 'По запросу ничего не найдено' : 'Пока нет завершённых проверок.'}</td></tr>`;
     return;
   }
 
   const renderRunRow = run => `
     <tr>
       <td>${formatDateTime(run.completedAt)}</td>
-      <td>${escapeHtml(run.userFullName || '--')}</td>
-      <td>${escapeHtml(run.userDepartment || '--')}</td>
       <td><strong>${escapeHtml(run.boxTitle || '--')}</strong><div class="sub-cell"><code>${escapeHtml(run.qrCode || '--')}</code></div></td>
       <td><span class="badge badge-success">Есть: ${Number(run.presentCount) || 0}</span> <span class="badge badge-warning">Частично: ${Number(run.partialCount) || 0}</span> <span class="badge badge-danger">Нет: ${Number(run.missingCount) || 0}</span></td>
       <td><button class="btn btn-secondary btn-sm" onclick="showInventoryRun(${Number(run.id)})">Подробнее</button></td>
@@ -100,14 +97,13 @@ function renderInventoryRuns() {
   rows.forEach(run => {
     let key, title, subtitle = '';
     if (groupBy === 'date') { key = title = formatDate(run.completedAt); }
-    else if (groupBy === 'user') { title = run.userFullName || 'Пользователь не указан'; subtitle = run.userDepartment || ''; key = `${title}\u0000${subtitle}`; }
-    else { title = run.boxTitle || 'Коробка не указана'; subtitle = run.qrCode || ''; key = `${title}\u0000${subtitle}`; }
+    else { title = run.boxTitle || 'Материальная ценность не указана'; subtitle = run.qrCode || ''; key = `${title}\u0000${subtitle}`; }
     if (!groups.has(key)) groups.set(key, { title, subtitle, runs: [] });
     groups.get(key).runs.push(run);
   });
 
   tbody.innerHTML = Array.from(groups.values()).map(group => `
-    <tr class="run-group-row"><td colspan="6">
+    <tr class="run-group-row"><td colspan="4">
       <div class="run-group-heading"><strong>${escapeHtml(group.title)}</strong><span>${formatRunCount(group.runs.length)}</span></div>
       ${group.subtitle ? `<div class="run-group-subtitle">${escapeHtml(group.subtitle)}</div>` : ''}
     </td></tr>
@@ -131,9 +127,7 @@ async function showInventoryRun(id) {
 
     document.getElementById('inventory-run-title').textContent = run.boxTitle || 'Результат инвентаризации';
     document.getElementById('inventory-run-meta').innerHTML = `
-      <div><span>Сотрудник</span><strong>${escapeHtml(run.userFullName || '--')}</strong></div>
-      <div><span>Отдел</span><strong>${escapeHtml(run.userDepartment || '--')}</strong></div>
-      <div><span>QR-код</span><strong><code>${escapeHtml(run.qrCode || '--')}</code></strong></div>
+      <div><span>ЕНС / СКК и количество</span><strong><code>${escapeHtml(run.qrCode || '--')}</code></strong></div>
       <div><span>Завершена</span><strong>${formatDateTime(run.completedAt)}</strong></div>`;
 
     document.getElementById('inventory-run-items').innerHTML = (run.items || []).map((item, index) => {
@@ -149,7 +143,7 @@ async function showInventoryRun(id) {
     const reportNote = String(run.reportNote || '').trim();
 
     media.innerHTML = [
-      reportNote ? `<section class="run-note"><strong>Заметка сотрудника</strong><p>${escapeHtml(reportNote).replace(/\r?\n/g, '<br>')}</p></section>` : '',
+      reportNote ? `<section class="run-note"><strong>Примечание</strong><p>${escapeHtml(reportNote).replace(/\r?\n/g, '<br>')}</p></section>` : '',
       ...photoUrls.map((url, index) => `<figure><figcaption>Фото ${index + 1}</figcaption><a href="${API}${escapeHtml(url)}" target="_blank" rel="noopener"><img src="${API}${escapeHtml(url)}" alt="Фото ${index + 1}"></a></figure>`),
       run.voiceUrl ? `<div><strong>Голосовое сообщение</strong><audio controls preload="none" src="${mediaUrl}/voice"></audio></div>` : ''
     ].join('');
@@ -165,10 +159,9 @@ async function showInventoryBatch(id) {
     const rows = await res.json();
     if (!res.ok) return toast(rows.message || 'Не удалось открыть сводную таблицу', 'error');
 
-    document.getElementById('inventory-batch-title').textContent = `Инвентаризация коробок · ${batch?.completedBoxCount || 0} / ${batch?.expectedBoxCount || 0}`;
+    document.getElementById('inventory-batch-title').textContent = `Инвентаризация · ${batch?.completedPositionCount || 0} / ${batch?.expectedPositionCount || 0} позиций`;
     document.getElementById('inventory-batch-meta').innerHTML = `
-      <div><span>Сотрудник</span><strong>${escapeHtml(batch?.userFullName || rows[0]?.userFullName || '--')}</strong></div>
-      <div><span>Отдел</span><strong>${escapeHtml(batch?.userDepartment || rows[0]?.userDepartment || '--')}</strong></div>
+      <div><span>Опись</span><strong>${escapeHtml(batch?.title || 'Общая опись')}</strong></div>
       <div><span>Начата</span><strong>${formatDateTime(batch?.startedAt)}</strong></div>
       <div><span>Состояние</span><strong>${batch?.status === 'completed' ? 'Завершена' : 'В процессе'}</strong></div>`;
 

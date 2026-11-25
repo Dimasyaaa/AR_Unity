@@ -107,7 +107,7 @@ public class InventoryRunRepository
         return (batchId, clientBatchId);
     }
 
-    /// <summary>Возвращает назначение сотрудника вместе со списком разрешённых QR-кодов.</summary>
+    /// <summary>Возвращает общую активную опись, а при её отсутствии — назначение сотрудника.</summary>
     public async Task<InventoryAssignmentDto?> GetActiveAssignmentForUserAsync(long userId)
     {
         await using var conn = await _dataSource.OpenConnectionAsync();
@@ -117,12 +117,14 @@ public class InventoryRunRepository
         await using (var batchCommand = new NpgsqlCommand(@"
             SELECT batch.id, batch.client_batch_id, batch.expected_box_count, batch.status
             FROM inventory_batches batch
-            WHERE batch.user_id = @userId AND batch.status IN ('assigned', 'in_progress')
+            WHERE (batch.source_file_data IS NOT NULL OR (@userId > 0 AND batch.user_id = @userId))
+              AND batch.status IN ('assigned', 'in_progress')
               AND EXISTS (
                   SELECT 1 FROM inventory_batch_boxes assigned
                   WHERE assigned.inventory_batch_id = batch.id
               )
-            ORDER BY batch.created_at
+            ORDER BY CASE WHEN batch.source_file_data IS NOT NULL THEN 0 ELSE 1 END,
+                     batch.started_at DESC
             LIMIT 1", conn))
         {
             batchCommand.Parameters.AddWithValue("userId", userId);
@@ -140,7 +142,7 @@ public class InventoryRunRepository
             JOIN qr_codes qr ON qr.id = assigned.qr_code_id
             LEFT JOIN boxes box ON box.qr_code_id = qr.id
             WHERE assigned.inventory_batch_id = @batchId
-            ORDER BY qr.code", conn);
+            ORDER BY assigned.sort_order NULLS LAST, qr.code", conn);
         boxesCommand.Parameters.AddWithValue("batchId", batchId);
         await using var boxesReader = await boxesCommand.ExecuteReaderAsync();
         while (await boxesReader.ReadAsync())
@@ -223,13 +225,14 @@ public class InventoryRunRepository
     {
         await using var conn = await _dataSource.OpenConnectionAsync();
         await using var cmd = new NpgsqlCommand(@"
-            SELECT r.id, r.completed_at, u.full_name, u.department,
+            SELECT r.id, r.completed_at,
+                   COALESCE(u.full_name, 'Общий терминал'), COALESCE(u.department, ''),
                    c.title, q.code,
                    COUNT(i.id) FILTER (WHERE i.status = 'present') AS present_count,
                    COUNT(i.id) FILTER (WHERE i.status = 'partial') AS partial_count,
                    COUNT(i.id) FILTER (WHERE i.status = 'missing') AS missing_count
             FROM inventory_runs r
-            JOIN users u ON u.id = r.user_id
+            LEFT JOIN users u ON u.id = r.user_id
             JOIN boxes c ON c.id = r.box_id
             JOIN qr_codes q ON q.id = r.qr_code_id
             LEFT JOIN inventory_run_items i ON i.inventory_run_id = r.id
@@ -274,7 +277,8 @@ public class InventoryRunRepository
 
         await using var mainCmd = new NpgsqlCommand(@"
             SELECT r.id, r.client_run_id, r.started_at, r.completed_at,
-                   r.user_id, u.full_name, u.department, c.title, q.code, r.report_note,
+                   COALESCE(r.user_id, 0), COALESCE(u.full_name, 'Общий терминал'),
+                   COALESCE(u.department, ''), c.title, q.code, r.report_note,
                    EXISTS (
                        SELECT 1 FROM inventory_run_attachments a
                        WHERE a.inventory_run_id = r.id AND a.attachment_type = 'photo'
@@ -284,7 +288,7 @@ public class InventoryRunRepository
                        WHERE a.inventory_run_id = r.id AND a.attachment_type = 'voice'
                    )
             FROM inventory_runs r
-            JOIN users u ON u.id = r.user_id
+            LEFT JOIN users u ON u.id = r.user_id
             JOIN boxes c ON c.id = r.box_id
             JOIN qr_codes q ON q.id = r.qr_code_id
             WHERE r.id = @runId", conn);
@@ -413,10 +417,11 @@ public class InventoryRunRepository
     {
         await using var cmd = new NpgsqlCommand(@"
             INSERT INTO inventory_batches (client_batch_id, user_id, expected_box_count, started_at)
-            VALUES (@clientBatchId, @userId, @expectedBoxCount, @startedAt)
+            VALUES (@clientBatchId, NULLIF(@userId, 0), @expectedBoxCount, @startedAt)
             ON CONFLICT (client_batch_id) DO UPDATE
                 SET status = 'in_progress', updated_at = NOW()
-                WHERE inventory_batches.user_id = EXCLUDED.user_id
+                WHERE (inventory_batches.user_id = EXCLUDED.user_id
+                       OR inventory_batches.source_file_data IS NOT NULL)
                   AND inventory_batches.expected_box_count = EXCLUDED.expected_box_count
                   AND inventory_batches.status IN ('assigned', 'in_progress')
             RETURNING id", conn, tran);
@@ -465,7 +470,7 @@ public class InventoryRunRepository
         await using var cmd = new NpgsqlCommand(@"
             INSERT INTO inventory_runs
                 (client_run_id, box_id, user_id, qr_code_id, started_at, completed_at, batch_id, report_note)
-            VALUES (@clientRunId, @boxId, @userId, @qrCodeId, @startedAt, @completedAt, @batchId, @reportNote)
+            VALUES (@clientRunId, @boxId, NULLIF(@userId, 0), @qrCodeId, @startedAt, @completedAt, @batchId, @reportNote)
             ON CONFLICT (client_run_id) DO NOTHING
             RETURNING id", conn, tran);
         
@@ -546,15 +551,18 @@ public class InventoryRunRepository
                    COALESCE(result.unit_snapshot, ''),
                    result.expected_quantity_snapshot, result.actual_quantity, result.status,
                    COALESCE(NULLIF(BTRIM(result.comment), ''), NULLIF(BTRIM(run.report_note), ''), ''),
-                   userRow.full_name, userRow.department,
+                   COALESCE(userRow.full_name, 'Общий терминал'),
+                   COALESCE(userRow.department, ''),
                    run.completed_at
             FROM inventory_runs run
             JOIN inventory_run_items result ON result.inventory_run_id = run.id
             JOIN boxes box ON box.id = run.box_id
             JOIN qr_codes qr ON qr.id = run.qr_code_id
-            JOIN users userRow ON userRow.id = run.user_id
+            LEFT JOIN inventory_batch_boxes assigned
+                   ON assigned.inventory_batch_id = run.batch_id AND assigned.qr_code_id = run.qr_code_id
+            LEFT JOIN users userRow ON userRow.id = run.user_id
             WHERE run.batch_id = @batchId
-            ORDER BY qr.code, result.item_name_snapshot", conn);
+            ORDER BY assigned.sort_order NULLS LAST, qr.code, result.item_name_snapshot", conn);
         cmd.Parameters.AddWithValue("batchId", batchId);
 
         var rows = new List<InventoryBatchExportRow>();
@@ -577,14 +585,15 @@ public class InventoryRunRepository
         await using var conn = await _dataSource.OpenConnectionAsync();
         await using var cmd = new NpgsqlCommand(@"
             SELECT batch.id, batch.expected_box_count, batch.status, batch.started_at,
-                   batch.completed_at, userRow.full_name, userRow.department,
+                   batch.completed_at,
+                   COALESCE(batch.inventory_title, userRow.full_name, 'Старая инвентаризация'),
                    COUNT(DISTINCT run.id) AS boxes_completed,
                    COUNT(DISTINCT run_item.id) AS positions_count
             FROM inventory_batches batch
-            JOIN users userRow ON userRow.id = batch.user_id
+            LEFT JOIN users userRow ON userRow.id = batch.user_id
             LEFT JOIN inventory_runs run ON run.batch_id = batch.id
             LEFT JOIN inventory_run_items run_item ON run_item.inventory_run_id = run.id
-            GROUP BY batch.id, userRow.full_name, userRow.department
+            GROUP BY batch.id, userRow.full_name
             ORDER BY batch.started_at DESC
             LIMIT @limit", conn);
         cmd.Parameters.AddWithValue("limit", Math.Clamp(limit, 1, 500));
@@ -596,14 +605,13 @@ public class InventoryRunRepository
             batches.Add(new
             {
                 id = reader.GetInt64(0),
-                expectedBoxCount = reader.GetInt32(1),
+                expectedPositionCount = reader.GetInt32(1),
                 status = reader.GetString(2),
                 startedAt = reader.GetDateTime(3),
                 completedAt = reader.IsDBNull(4) ? (DateTime?)null : reader.GetDateTime(4),
-                userFullName = reader.GetString(5),
-                userDepartment = reader.GetString(6),
-                completedBoxCount = reader.GetInt64(7),
-                positionCount = reader.GetInt64(8),
+                title = reader.GetString(5),
+                completedPositionCount = reader.GetInt64(6),
+                positionCount = reader.GetInt64(7),
                 excelUrl = $"/api/admin/inventory/batches/{reader.GetInt64(0)}/excel"
             });
         }

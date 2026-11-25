@@ -204,7 +204,7 @@ namespace ArInventory.Local
                         }
                     }
 
-                    // Обновляем назначения из экспорта, но не сбрасываем локально завершённые проверки.
+                    // Обновляем общие описи и старые назначения, сохраняя локально завершённые проверки.
                     foreach (LocalInventoryBatch assignment in exportedAssignments)
                     {
                         if (string.IsNullOrWhiteSpace(assignment.client_batch_id) ||
@@ -313,7 +313,7 @@ namespace ArInventory.Local
         public LocalInventoryBatch SaveAssignedInventoryBatch(string clientBatchId, long userId,
             IReadOnlyList<string> assignedQrCodes)
         {
-            if (!IsReady || userId <= 0 || string.IsNullOrWhiteSpace(clientBatchId))
+            if (!IsReady || userId < 0 || string.IsNullOrWhiteSpace(clientBatchId))
                 return null;
 
             var normalizedCodes = assignedQrCodes?
@@ -386,7 +386,7 @@ namespace ArInventory.Local
         /// <summary>Возвращает активную общую проверку сотрудника или начинает новую.</summary>
         public LocalInventoryBatch GetOrStartInventoryBatch(long userId, int expectedBoxCount)
         {
-            if (!IsReady || userId <= 0)
+            if (!IsReady || userId < 0)
                 return null;
 
             int safeCount = System.Math.Max(1, expectedBoxCount);
@@ -417,21 +417,36 @@ namespace ArInventory.Local
             return batch;
         }
 
-        /// <summary>Возвращает незавершённый запуск сотрудника, если он есть.</summary>
+        /// <summary>Возвращает запуск сотрудника или закрепляет за ним нераспределённую общую опись.</summary>
         public LocalInventoryBatch GetActiveInventoryBatch(long userId)
         {
-            if (!IsReady || userId <= 0)
+            if (!IsReady || userId < 0)
                 return null;
 
-            return db.Table<LocalInventoryBatch>()
-                .ToList()
+            List<LocalInventoryBatch> batches = db.Table<LocalInventoryBatch>().ToList();
+
+            LocalInventoryBatch personalBatch = batches
                 .FirstOrDefault(batch => batch.user_id == userId && batch.status == "in_progress");
+            if (personalBatch != null)
+                return personalBatch;
+
+            // В старом режиме закрепляем общую опись за сотрудником; ноль остаётся общим терминалом.
+            LocalInventoryBatch sharedBatch = batches
+                .Where(batch => batch.user_id == 0 && batch.status == "in_progress")
+                .OrderByDescending(batch => batch.started_at)
+                .FirstOrDefault();
+            if (sharedBatch == null)
+                return null;
+
+            sharedBatch.user_id = userId;
+            db.Update(sharedBatch);
+            return sharedBatch;
         }
 
         /// <summary>Возвращает последний запуск сотрудника для итогового экрана.</summary>
         public LocalInventoryBatch GetLatestInventoryBatch(long userId)
         {
-            if (!IsReady || userId <= 0)
+            if (!IsReady || userId < 0)
                 return null;
 
             return db.Table<LocalInventoryBatch>()
@@ -444,7 +459,7 @@ namespace ArInventory.Local
         /// <summary>Возвращает последние завершённые проверки, сохранённые на этом устройстве.</summary>
         public List<LocalInventoryBatch> GetCompletedInventoryBatches(long userId, int limit)
         {
-            if (!IsReady || userId <= 0 || limit <= 0)
+            if (!IsReady || userId < 0 || limit <= 0)
                 return new List<LocalInventoryBatch>();
 
             return db.Table<LocalInventoryBatch>()

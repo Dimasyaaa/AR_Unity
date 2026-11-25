@@ -64,7 +64,18 @@ namespace ArInventory.Local
                 .Where(s => !s.synced)
                 .ToList();
 
-            string sessionSummary = "Нет новых записей";
+            // События общего терминала не требуют пользователя на сервере; отмечаем их локально.
+            var anonymousSessions = unsynced.Where(session => session.user_id == 0).ToList();
+            foreach (var session in anonymousSessions)
+            {
+                session.synced = true;
+                LocalDatabase.Instance.Connection.Update(session);
+            }
+            unsynced = unsynced.Where(session => session.user_id > 0).ToList();
+
+            string sessionSummary = anonymousSessions.Count > 0
+                ? "События общего режима оставлены без пользователя"
+                : "Нет новых записей";
             if (unsynced.Count > 0)
             {
                 var payload = new SyncPayload();
@@ -214,7 +225,14 @@ namespace ArInventory.Local
                 return false;
             }
 
-            if (database.Connection.Table<LocalUser>().FirstOrDefault(user => user.id == run.user_id) == null)
+            if (run.user_id < 0 || (run.user_id == 0 && SessionManager.AuthenticationEnabled))
+            {
+                error = "Для проверки не указан пользователь; включён режим с авторизацией.";
+                return false;
+            }
+
+            if (run.user_id > 0 &&
+                database.Connection.Table<LocalUser>().FirstOrDefault(user => user.id == run.user_id) == null)
             {
                 error = "Сотрудник старой проверки отсутствует в актуальной локальной базе.";
                 return false;

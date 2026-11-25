@@ -84,6 +84,17 @@ public static class InventoryEndpoints
         .WithSummary("Получить GLB-модель содержимого коробки")
         .Produces(200).Produces(404);
 
+        endpoints.MapGet("/api/inventory/assignments/active", async (InventoryRunRepository runs) =>
+        {
+            var assignment = await runs.GetActiveAssignmentForUserAsync(0);
+            return assignment is null
+                ? Results.NotFound(new { success = false, message = "Активная опись пока не загружена." })
+                : Results.Ok(assignment);
+        })
+        .WithTags("Inventory")
+        .WithSummary("Получить единственную активную общую опись без входа сотрудника")
+        .Produces(200).Produces(404);
+
         endpoints.MapGet("/api/inventory/assignments/{userId:long}/active", async (long userId, InventoryRunRepository runs) =>
         {
             if (userId <= 0)

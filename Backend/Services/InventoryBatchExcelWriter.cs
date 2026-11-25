@@ -24,7 +24,7 @@ public static class InventoryBatchExcelWriter
         @"\$?[A-Z]{1,3}\$?\d+(?::\$?[A-Z]{1,3}\$?\d+)?", RegexOptions.Compiled);
 
     /// <summary>Заполняет два листа исходной описи, не меняя их макет и оформление.</summary>
-    public static byte[] Create(IReadOnlyList<InventoryBatchExportRow> rows)
+    public static byte[] Create(IReadOnlyList<InventoryBatchExportRow> rows, byte[]? workbookTemplate = null)
     {
         if (rows.Count == 0)
             throw new ArgumentException("Нельзя сформировать опись без строк инвентаризации.", nameof(rows));
@@ -33,7 +33,7 @@ public static class InventoryBatchExcelWriter
         List<string> divisions = GetDistinctValues(rows.Select(row => row.StructuralDivision));
         List<string> molNames = GetDistinctValues(rows.Select(row => row.Mol));
 
-        using Stream template = OpenTemplate();
+        using Stream template = OpenTemplate(workbookTemplate);
         using var sourceArchive = new ZipArchive(template, ZipArchiveMode.Read, leaveOpen: true);
         List<string> sharedStrings = ReadSharedStrings(sourceArchive);
         using var output = new MemoryStream();
@@ -68,15 +68,20 @@ public static class InventoryBatchExcelWriter
     }
 
     /// <summary>Открывает шаблон, включённый в сборку, чтобы серверу не нужен был отдельный файл рядом.</summary>
-    private static Stream OpenTemplate() =>
-        typeof(InventoryBatchExcelWriter).Assembly.GetManifestResourceStream(TemplateResourceName)
-        ?? throw new InvalidOperationException("В сборку не включён шаблон инвентаризационной описи.");
+    private static Stream OpenTemplate(byte[]? workbookTemplate)
+    {
+        if (workbookTemplate is { Length: > 0 })
+            return new MemoryStream(workbookTemplate, writable: false);
+
+        return typeof(InventoryBatchExcelWriter).Assembly.GetManifestResourceStream(TemplateResourceName)
+            ?? throw new InvalidOperationException("В сборку не включён шаблон инвентаризационной описи.");
+    }
 
     /// <summary>Считывает общие текстовые значения исходной книги для замены текста в её ячейках.</summary>
     private static List<string> ReadSharedStrings(ZipArchive archive)
     {
-        ZipArchiveEntry entry = archive.GetEntry("xl/sharedStrings.xml")
-            ?? throw new InvalidDataException("В шаблоне не найден список текстовых значений.");
+        ZipArchiveEntry? entry = archive.GetEntry("xl/sharedStrings.xml");
+        if (entry is null) return new List<string>();
         using Stream stream = entry.Open();
         XDocument document = XDocument.Load(stream);
         return document.Root?.Elements(SheetNamespace + "si")

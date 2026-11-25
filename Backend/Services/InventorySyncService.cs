@@ -63,8 +63,8 @@ public class InventorySyncService
         // 1. Базовая валидация входных данных
         if (run.clientRunId == Guid.Empty)
             throw new ArgumentException("Проверка пропущена: отсутствует clientRunId.");
-        if (run.userId <= 0 || run.userId > int.MaxValue || string.IsNullOrWhiteSpace(run.qrCode))
-            throw new ArgumentException("Проверка пропущена: не указан сотрудник или QR.");
+        if (run.userId < 0 || run.userId > int.MaxValue || string.IsNullOrWhiteSpace(run.qrCode))
+            throw new ArgumentException("Проверка пропущена: некорректный пользователь или QR.");
         if (run.items == null || run.items.Count == 0)
             throw new ArgumentException("Проверка пропущена: список предметов пуст.");
 
@@ -97,10 +97,13 @@ public class InventorySyncService
         }
 
         // 5. Проверка, что пользователь существует и активен
-        await using var userCmd = new NpgsqlCommand("SELECT 1 FROM users WHERE id = @userId AND is_active = TRUE", conn, transaction);
-        userCmd.Parameters.AddWithValue("userId", run.userId);
-        if (await userCmd.ExecuteScalarAsync() is null)
-            throw new ArgumentException("Проверка пропущена: сотрудник не найден или отключён.");
+        if (run.userId > 0)
+        {
+            await using var userCmd = new NpgsqlCommand("SELECT 1 FROM users WHERE id = @userId AND is_active = TRUE", conn, transaction);
+            userCmd.Parameters.AddWithValue("userId", run.userId);
+            if (await userCmd.ExecuteScalarAsync() is null)
+                throw new ArgumentException("Проверка пропущена: сотрудник не найден или отключён.");
+        }
 
         // 6. Ищем коробку по QR-коду в рамках текущей транзакции.
         // Запрос оставлен здесь, чтобы искать QR и читать профиль атомарно с сохранением результата.
@@ -233,7 +236,7 @@ public class InventorySyncService
         int partial = run.items.Count - present - missing;
         await using var logCmd = new NpgsqlCommand(@"
             INSERT INTO inventory_sessions (user_id, qr_code_id, action, comment, action_time)
-            VALUES (@userId, @qrCodeId, 'inventory', @comment, @completedAt)", conn, transaction);
+            VALUES (NULLIF(@userId, 0), @qrCodeId, 'inventory', @comment, @completedAt)", conn, transaction);
         
         logCmd.Parameters.AddWithValue("userId", run.userId);
         logCmd.Parameters.AddWithValue("qrCodeId", qrCodeId);

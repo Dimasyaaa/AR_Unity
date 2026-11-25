@@ -20,34 +20,40 @@
 			</header>
 
 			<div class="tabs">
-				<button class="tab active" data-tab="users">Пользователи</button>
+				<button class="tab active" data-tab="home">Главная</button>
 				<button class="tab" data-tab="qr">QR-коды</button>
-				<button class="tab" data-tab="inventory">Коробки</button>
+				<button class="tab" data-tab="inventory">Позиции МТР</button>
 				<button class="tab" data-tab="runs">Инвентаризации</button>
 				<button class="tab" data-tab="sessions">Журнал</button>
 			</div>
 
-			<div class="panel" id="panel-users">
-				<div class="panel-header">
-					<h2>Пользователи</h2>
-					<div class="header-controls">
-						<input type="text" class="search" id="search-users" placeholder="Поиск...">
-							<button class="btn btn-primary" onclick="openUserModal()">Новый пользователь</button>
-						</div>
+			<div class="panel home-panel" id="panel-home">
+				<section class="inventory-home-hero">
+					<div class="inventory-home-copy">
+						<span class="eyebrow">РАБОЧЕЕ МЕСТО ИНВЕНТАРИЗАЦИИ</span>
+						<h2>Начните проверку по готовой описи</h2>
+						<p>Загрузите Excel-файл со списком материальных ценностей. Система подготовит QR-код для каждой строки и передаст общий перечень в приложение.</p>
+						<button class="btn btn-start-inventory" id="open-inventory-import" type="button" onclick="showInventoryImport()">Начать инвентаризацию</button>
+					</div>
+					<div class="inventory-home-art" aria-hidden="true"><span>01</span><span>02</span><span>03</span><i>✓</i></div>
+				</section>
+
+			<section class="current-inventory-card" id="current-inventory-card" aria-live="polite">
+				<div class="current-inventory-icon" aria-hidden="true">↗</div>
+				<div><span class="eyebrow">ТЕКУЩАЯ ОПИСЬ</span><h3 id="current-inventory-title">Проверяем состояние…</h3><p id="current-inventory-details" class="hint">Загружаем данные с сервера.</p></div>
+			</section>
+
+			<section class="inventory-import-workflow" id="inventory-import-workflow" hidden>
+				<div class="section-heading"><div><span class="eyebrow">НОВАЯ ИНВЕНТАРИЗАЦИЯ</span><h2>Прикрепите Excel-опись</h2><p class="hint">Выберите готовый файл .xlsx. После проверки опись автоматически станет доступна в AR-приложении.</p></div><button class="icon-button" type="button" onclick="hideInventoryImport()" aria-label="Закрыть выбор описи">×</button></div>
+				<label class="inventory-file-picker" for="inventory-excel-file"><span class="file-picker-icon" aria-hidden="true">XLS</span><span><strong>Выберите файл описи</strong><small>Формат .xlsx, размер до 20 МБ</small></span><span class="btn btn-secondary">Обзор файлов</span></label>
+				<input class="visually-hidden-file" id="inventory-excel-file" type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onchange="previewInventoryFile(this.files?.[0])">
+				<p class="inventory-import-status hint" id="inventory-import-status" role="status">Опись ещё не выбрана.</p>
+				<div class="inventory-import-preview" id="inventory-import-preview" hidden>
+					<div class="import-preview-heading"><div><h3 id="inventory-import-file-name">Предварительный просмотр</h3><p class="hint" id="inventory-import-position-count"></p></div><button class="btn btn-secondary btn-sm" type="button" onclick="clearInventoryFile()">Выбрать другой файл</button></div>
+					<div class="table-wrap inventory-import-table-wrap"><table class="inventory-import-table"><thead><tr><th>Строка</th><th>Подразделение</th><th>Склад</th><th>Наименование МТР</th><th>ЕНС / СКК</th><th>Счёт</th><th>МОЛ</th><th>Место хранения</th><th>Ед.</th><th>Количество по учёту</th><th>QR-содержимое</th></tr></thead><tbody id="inventory-import-rows"></tbody></table></div>
+					<div class="import-preview-footer"><p class="hint">ЕНС/СКК и учётное количество из строк будут использованы для QR-кодов. Опись запускается автоматически после проверки.</p></div>
 				</div>
-				<table>
-					<thead>
-						<tr>
-							<th>ID</th>
-							<th>ФИО</th>
-							<th>Отдел</th>
-							<th>Статус</th>
-							<th>Создан</th>
-							<th></th>
-						</tr>
-					</thead>
-					<tbody id="users-body"></tbody>
-				</table>
+			</section>
 			</div>
 
 			<div class="panel" id="panel-qr" style="display:none;">
@@ -62,8 +68,9 @@
 					<thead>
 						<tr>
 							<th>ID</th>
-							<th>Код</th>
-							<th>Объект</th>
+							<th>ЕНС / СКК</th>
+							<th>Количество по учёту</th>
+							<th>Содержимое QR</th>
 							<th>Статус</th>
 							<th>Создан</th>
 							<th></th>
@@ -113,17 +120,17 @@
 			<div class="panel" id="panel-inventory" style="display:none;">
 				<div class="panel-header">
 					<div>
-						<h2>Коробки и перечни</h2>
-						<p class="hint">Настройте изображения коробки, позиции и учётное количество для её QR-кода.</p>
+						<h2>Материальные ценности</h2>
+						<p class="hint">Дополните позицию по ЕНС/СКК изображением или 3D-моделью.</p>
 					</div>
 					<div class="header-controls">
-						<input type="text" class="search" id="search-inventory" placeholder="Поиск по QR или коробке...">
-						<button class="btn btn-primary" onclick="openNewInventoryBox()">Добавить коробку</button>
+						<input type="text" class="search" id="search-inventory" placeholder="Поиск по QR или наименованию...">
+						<button class="btn btn-primary" onclick="openNewInventoryBox()">Добавить позицию</button>
 						<button class="btn btn-secondary" onclick="loadInventoryBoxes()">Обновить</button>
 					</div>
 				</div>
 				<table>
-					<thead><tr><th>QR-код</th><th>Коробка</th><th>Изображения</th><th>3D-модель</th><th>Позиций</th><th></th></tr></thead>
+					<thead><tr><th>QR-код</th><th>Наименование МТР</th><th>Изображения</th><th>3D-модель</th><th>Позиции</th><th></th></tr></thead>
 					<tbody id="inventory-boxes-body"></tbody>
 				</table>
 			</div>
@@ -131,80 +138,61 @@
 			<div class="panel" id="panel-runs" style="display:none;">
 				<section class="batch-reports">
 					<div class="panel-header">
-					<div><h2>Общие инвентаризации коробок</h2><p class="hint">Выберите нужные коробки для сотрудника, затем просматривайте ход проверки и скачивайте сводку в Excel.</p></div>
-						<div class="header-controls"><button class="btn btn-primary" onclick="openInventoryAssignment()">Назначить инвентаризацию</button><button class="btn btn-secondary" onclick="loadInventoryBatches()">Обновить</button></div>
+					<div><h2>Инвентаризационные описи</h2><p class="hint">Просматривайте ход проверки описи, отправленной в AR-приложение, и скачивайте итоговый Excel.</p></div>
+						<div class="header-controls"><button class="btn btn-secondary" onclick="loadInventoryBatches()">Обновить</button></div>
 					</div>
 					<div class="table-wrap"><table>
-						<thead><tr><th>Начата</th><th>Сотрудник</th><th>Отдел</th><th>Коробки</th><th>Статус</th><th></th></tr></thead>
-						<tbody id="inventory-batches-body"><tr><td colspan="6" class="empty">Загрузка общих проверок…</td></tr></tbody>
+						<thead><tr><th>Начата</th><th>Опись</th><th>Позиции</th><th>Статус</th><th></th></tr></thead>
+						<tbody id="inventory-batches-body"><tr><td colspan="5" class="empty">Загрузка описи…</td></tr></tbody>
 					</table></div>
 				</section>
 				<div class="panel-header">
-					<div><h2>Проверки коробок</h2><p class="hint">Отдельные результаты проверки можно сгруппировать по коробке, сотруднику или дате.</p></div>
+					<div><h2>Результаты проверок</h2><p class="hint">Просматривайте отдельные результаты по материальным ценностям и дате.</p></div>
 					<div class="header-controls">
-						<input type="text" class="search" id="search-runs" placeholder="Сотрудник, коробка или QR-код…">
+						<input type="text" class="search" id="search-runs" placeholder="Материальная ценность или ЕНС/СКК…">
 						<select class="search" id="group-runs-by" aria-label="Группировка проверок">
-							<option value="box">Группировать по коробке</option>
+							<option value="box">Группировать по позиции МТР</option>
 							<option value="date">Группировать по дате</option>
-							<option value="user">Группировать по сотруднику</option>
 							<option value="none">Без группировки</option>
 						</select>
 						<button class="btn btn-secondary" onclick="loadInventoryRuns()">Обновить</button>
 					</div>
 				</div>
 				<div class="table-wrap"><table>
-					<thead><tr><th>Дата проверки</th><th>Сотрудник</th><th>Отдел</th><th>Коробка</th><th>Результат</th><th></th></tr></thead>
+					<thead><tr><th>Дата проверки</th><th>Материальная ценность / QR</th><th>Результат</th><th></th></tr></thead>
 					<tbody id="inventory-runs-body"></tbody>
 				</table></div>
 			</div>
-		</div>
-
-		<div class="modal-overlay" id="modal-user">
-			<div class="modal">
-				<h3 id="user-modal-title">Новый пользователь</h3>
-				<input type="hidden" id="user-id">
-					<div class="form-group">
-						<label>ФИО</label>
-						<input type="text" id="user-fullName" placeholder="Иванов И.И.">
-      </div>
-					<div class="form-group">
-						<label>Отдел</label>
-						<select id="user-department"></select>
-					</div>
-					<div class="form-group" id="user-department-new-group" style="display:none;">
-						<label>Новый отдел</label>
-						<input type="text" id="user-department-new" placeholder="Введите название нового отдела">
-      </div>
-					<div class="form-group">
-						<label>Пароль</label>
-						<input type="text" id="user-password" placeholder="Оставьте пустым, чтобы не менять">
-							<div class="hint">При редактировании оставьте поле пустым, чтобы сохранить старый пароль.</div>
-						</div>
-					<div class="form-group">
-						<div class="checkbox-row">
-							<input type="checkbox" id="user-isActive" checked="">
-								<label for="user-isActive" style="margin:0;">Активен</label>
-							</div>
-					</div>
-					<div class="modal-actions">
-						<button class="btn btn-secondary" onclick="closeModal('modal-user')">Отмена</button>
-						<button class="btn btn-primary" onclick="saveUser()">Сохранить</button>
-					</div>
-				</div>
 		</div>
 
 		<div class="modal-overlay" id="modal-qr">
 			<div class="modal">
 				<h3 id="qr-modal-title">Новый QR-код</h3>
 				<input type="hidden" id="qr-id">
+				<div id="qr-inventory-fields">
 					<div class="form-group">
-						<label>Код</label>
-						<input type="text" id="qr-code" placeholder="TEST_QR_001">
-      </div>
+						<label for="qr-ens-code">ЕНС / СКК</label>
+						<input type="text" id="qr-ens-code" placeholder="Например, 022297" maxlength="100" autocomplete="off">
+					</div>
 					<div class="form-group">
-						<label>Название объекта</label>
-						<input type="text" id="qr-objectName" placeholder="Описание объекта">
-      </div>
+						<label for="qr-accounting-quantity">Количество по учёту</label>
+						<input type="number" id="qr-accounting-quantity" min="1" max="100000" step="1" value="1">
+					</div>
+					<div class="form-group">
+						<label>Текст, записываемый в QR</label>
+						<code id="qr-payload-preview">Введите ЕНС/СКК и количество</code>
+					</div>
+					<div class="qr-label-preview">
+						<img id="qr-preview-image" alt="Предварительный QR-код МТР" hidden>
+						<button type="button" class="btn btn-secondary" id="qr-preview-print" onclick="printQrPreview()" disabled>Печать QR-этикетки</button>
+					</div>
+				</div>
+				<div id="qr-legacy-fields" class="form-group" hidden>
+					<label>Старый QR-код (содержимое сохранено без изменений)</label>
+					<input type="text" id="qr-legacy-code" readonly>
+					<input type="hidden" id="qr-legacy-object-name">
+					<div class="hint">Старую запись можно распечатать или отключить. Новые этикетки создаются в формате ЕНС/СКК#количество.</div>
+				</div>
 					<div class="form-group">
 						<div class="checkbox-row">
 							<input type="checkbox" id="qr-isActive" checked="">
@@ -220,12 +208,12 @@
 
 		<div class="modal-overlay" id="modal-inventory">
 			<div class="modal modal-wide">
-				<h3>Карточка коробки</h3>
+				<h3>Карточка материальной ценности</h3>
 				<input type="hidden" id="inventory-qr-id">
 				<div class="form-group"><label>QR-код</label><input id="inventory-qr-code" type="text" readonly></div>
-				<div class="form-group"><label>Название коробки</label><input id="inventory-title" type="text" placeholder="Например, Коробка № 4"></div>
+				<div class="form-group"><label>Наименование МТР</label><input id="inventory-title" type="text" placeholder="Наименование из описи"></div>
 				<div class="form-group">
-					<label>Изображения содержимого коробки (JPEG, PNG, WebP; до 8 МБ на файл)</label>
+					<label>Изображения материальной ценности (JPEG, PNG, WebP; до 8 МБ на файл)</label>
 					<div class="photo-upload-grid" id="inventory-photo-list"></div>
 					<button type="button" class="btn btn-secondary btn-sm" onclick="addInventoryPhotoInput()">Добавить изображение</button>
 				</div>
@@ -240,7 +228,7 @@
 						</table>
 					</div>
 					<button type="button" class="btn btn-secondary btn-sm" onclick="addInventoryItemRow()">Добавить позицию</button>
-					<div class="hint">Здесь заполняются исходные реквизиты и учётное количество. Фактическое количество вводится сотрудником при проверке; примечание попадёт из распознанной голосовой заметки отчёта.</div>
+					<div class="hint">Исходные реквизиты и учётное количество берутся из описи. Фактическое количество и примечание фиксируются в AR-приложении.</div>
 					<div class="hint">Структурное подразделение и склад можно выбрать из подсказок или ввести вручную. После сохранения новые значения появятся в подсказках. ЕНС, счёт, МОЛ и остальные поля также заполняются вручную.</div>
 				</div>
 				<div class="form-group">
@@ -251,14 +239,14 @@
 				</div>
 				<div class="modal-actions">
 					<button class="btn btn-secondary" onclick="closeModal('modal-inventory')">Отмена</button>
-					<button class="btn btn-primary" onclick="saveInventoryBox()">Сохранить коробку</button>
+					<button class="btn btn-primary" onclick="saveInventoryBox()">Сохранить данные МТР</button>
 				</div>
 			</div>
 		</div>
 		<div class="modal-overlay" id="modal-new-inventory-box">
 			<div class="modal modal-small">
-				<h3>Добавить коробку</h3>
-				<p class="hint">Выберите QR-код, который будет обозначать коробку. Для него будет создан перечень содержимого.</p>
+				<h3>Добавить материальную ценность</h3>
+				<p class="hint">Выберите созданный QR-код. Для него будут сохранены изображения, 3D-модель и реквизиты позиции.</p>
 				<div class="form-group"><label>Свободный QR-код</label><select id="new-inventory-qr"></select></div>
 				<div class="modal-actions">
 					<button class="btn btn-secondary" onclick="closeModal('modal-new-inventory-box')">Отмена</button>
@@ -267,19 +255,9 @@
 			</div>
 		</div>
 
-		<div class="modal-overlay" id="modal-inventory-assignment">
-			<div class="modal modal-wide">
-				<h3>Назначить инвентаризацию</h3>
-				<p class="hint">Выберите сотрудника и любое количество настроенных коробок. Сотрудник сможет проверить только выбранные коробки.</p>
-				<div class="form-group"><label for="assignment-user">Сотрудник</label><select id="assignment-user"></select></div>
-				<div class="form-group"><label>Коробки <span id="assignment-count" class="hint">Выбрано 0</span></label><div id="assignment-boxes" class="assignment-box-list"></div></div>
-				<div class="modal-actions"><button class="btn btn-secondary" onclick="closeModal('modal-inventory-assignment')">Отмена</button><button class="btn btn-primary" onclick="createInventoryAssignment()">Назначить</button></div>
-			</div>
-		</div>
-
 		<div class="modal-overlay" id="modal-inventory-run">
 			<div class="modal modal-wide">
-				<div class="modal-title-row"><div><span class="eyebrow">ПРОВЕРКА КОРОБКИ</span><h3 id="inventory-run-title">Результат инвентаризации</h3></div><button class="icon-button" onclick="closeModal('modal-inventory-run')" aria-label="Закрыть">×</button></div>
+			<div class="modal-title-row"><div><span class="eyebrow">РЕЗУЛЬТАТ ПРОВЕРКИ</span><h3 id="inventory-run-title">Результат инвентаризации</h3></div><button class="icon-button" onclick="closeModal('modal-inventory-run')" aria-label="Закрыть">×</button></div>
 				<div id="inventory-run-meta" class="run-meta"></div>
 				<section id="inventory-run-media" class="run-media" aria-label="Вложения к проверке"></section>
 				<div class="table-wrap"><table class="run-items-table"><thead><tr><th>№</th><th>Позиция</th><th>Количество</th><th>Статус</th><th>Комментарий</th></tr></thead><tbody id="inventory-run-items"></tbody></table></div>
@@ -300,12 +278,11 @@
 
 		<!-- Сначала подключаются общие помощники, затем разделы и их обработчики. -->
 		<script src="/js/utils.js"></script>
-		<script src="/js/users.js"></script>
-		<script src="/js/qr.js"></script>
+		<script src="/js/qr.js?v=20261125-qr-preview"></script>
 		<script src="/js/sessions.js"></script>
 		<script src="/js/inventory-runs.js"></script>
 		<script src="/js/inventory-box.js"></script>
-		<script src="/js/inventory-assignments.js"></script>
+		<script src="/js/inventory-import.js?v=20261125-inventory-import"></script>
 		<script src="/js/main.js"></script>
 </body>
 </html>

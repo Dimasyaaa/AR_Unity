@@ -1,8 +1,10 @@
 using Backend.Contracts;
 using Backend.Data;
+using Backend.Helpers;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
+using QRCoder;
 
 namespace Backend.Endpoints;
 
@@ -22,6 +24,66 @@ public static class QrAdminEndpoints
         .WithTags("Admin: QR")
         .WithSummary("Список всех QR-кодов")
         .Produces(200);
+
+        endpoints.MapPost("/api/admin/qr/inventory", async (
+            InventoryQrCreateDto request, QrRepository qrRepo) =>
+        {
+            if (request is null)
+                return Results.BadRequest(new { success = false, message = "Укажите ЕНС/СКК и учётное количество." });
+
+            string code;
+            try
+            {
+                code = QrHelper.CreateInventoryPayload(request.ensCode, request.accountingQuantity);
+            }
+            catch (ArgumentException error)
+            {
+                return Results.BadRequest(new { success = false, message = error.Message });
+            }
+
+            if (await qrRepo.ExistsByCodeAsync(code))
+                return Results.Conflict(new { success = false, message = "QR с такой парой ЕНС/СКК и количества уже создан." });
+
+            var newId = await qrRepo.CreateQrAsync(new QrDto
+            {
+                code = code,
+                objectName = $"МТР {request.ensCode.Trim()}",
+                isActive = true
+            });
+            return Results.Ok(new { success = true, id = newId, code, message = "QR-код МТР создан." });
+        })
+        .WithTags("Admin: QR")
+        .WithSummary("Создать QR для одной строки МТР")
+        .Produces(200).Produces(400).Produces(409);
+
+        endpoints.MapGet("/api/admin/qr/{id:long}/image", async (long id, QrRepository qrRepo) =>
+        {
+            string? code = await qrRepo.GetCodeByIdAsync(id);
+            if (code is null) return Results.NotFound(new { message = "Активный QR-код не найден." });
+
+            return Results.Bytes(CreateQrPng(code), "image/png");
+        })
+        .WithTags("Admin: QR")
+        .WithSummary("Получить PNG-изображение QR-кода для печати")
+        .Produces(200).Produces(404);
+
+        endpoints.MapGet("/api/admin/qr/preview", (string? ensCode, int? accountingQuantity) =>
+        {
+            string code;
+            try
+            {
+                code = QrHelper.CreateInventoryPayload(ensCode ?? string.Empty, accountingQuantity ?? 0);
+            }
+            catch (ArgumentException error)
+            {
+                return Results.BadRequest(new { message = error.Message });
+            }
+
+            return Results.Bytes(CreateQrPng(code), "image/png");
+        })
+        .WithTags("Admin: QR")
+        .WithSummary("Сформировать изображение QR до сохранения этикетки")
+        .Produces(200).Produces(400);
 
         endpoints.MapPost("/api/admin/qr", async (QrDto dto, QrRepository qrRepo) =>
         {
@@ -79,5 +141,13 @@ public static class QrAdminEndpoints
         .Produces(200).Produces(404);
 
         return endpoints;
+    }
+
+    /// <summary>Создаёт PNG-картинку с достаточной коррекцией ошибок для печатной этикетки.</summary>
+    private static byte[] CreateQrPng(string code)
+    {
+        using var generator = new QRCodeGenerator();
+        using QRCodeData data = generator.CreateQrCode(code, QRCodeGenerator.ECCLevel.Q);
+        return new PngByteQRCode(data).GetGraphic(12);
     }
 }

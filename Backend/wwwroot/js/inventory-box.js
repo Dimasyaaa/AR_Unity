@@ -1,4 +1,4 @@
-// Настройка содержимого коробки: позиции, фотографии, GLB-модель и QR-код.
+// Дополнительные изображения, GLB-модель и реквизиты позиции МТР по QR-коду.
 let inventoryBoxes = [];
 let inventoryCurrent = null;
 const photosMarkedForRemoval = new Set();
@@ -91,21 +91,21 @@ function readInventoryItemRows() {
   });
 }
 
-// Загружает список QR-кодов и настроенных для них коробок.
+// Загружает список QR-кодов и связанные с ними позиции материальных ценностей.
 async function loadInventoryBoxes() {
   try {
     const response = await fetch(`${API}/api/admin/inventory/boxes`);
-    if (!response.ok) throw new Error('Сервер не вернул список коробок');
+    if (!response.ok) throw new Error('Сервер не вернул список позиций МТР');
     inventoryBoxes = await response.json();
     renderInventoryBoxes();
   } catch (error) {
     const tbody = document.getElementById('inventory-boxes-body');
     if (tbody) tbody.innerHTML = `<tr><td colspan="6" class="empty">Не удалось загрузить список: ${escapeHtml(error.message)}.</td></tr>`;
-    toast('Не удалось загрузить коробки: ' + error.message, 'error');
+    toast('Не удалось загрузить позиции: ' + error.message, 'error');
   }
 }
 
-// Отрисовывает коробки и действия для их настройки или удаления.
+// Показывает QR-коды, позиции и действия для настройки медиафайлов.
 function renderInventoryBoxes() {
   const tbody = document.getElementById('inventory-boxes-body');
   if (!tbody) return;
@@ -114,7 +114,7 @@ function renderInventoryBoxes() {
     String(item.qrCode || '').toLowerCase().includes(search) || String(item.title || '').toLowerCase().includes(search) || String(item.objectName || '').toLowerCase().includes(search)
   );
   if (!rows.length) {
-    tbody.innerHTML = '<tr><td colspan="6" class="empty">Коробки не найдены. Сначала создайте QR-код во вкладке «QR-коды».</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="6" class="empty">Позиции не найдены. Сначала создайте QR-код во вкладке «QR-коды» или загрузите опись.</td></tr>';
     return;
   }
   tbody.innerHTML = rows.map(item => `
@@ -125,13 +125,13 @@ function renderInventoryBoxes() {
       <td>${item.modelAvailable ? '<span class="badge badge-success">GLB добавлена</span>' : '<span class="badge badge-warning">Примитивы</span>'}</td>
       <td>${item.itemCount}</td>
       <td><div class="row-actions">
-        <button class="btn btn-secondary btn-sm" onclick="openInventoryBox(${item.qrCodeId})">${item.boxId ? 'Настроить' : 'Создать коробку'}</button>
-        ${item.boxId ? `<button class="btn btn-danger btn-sm" onclick="deleteInventoryBox(${item.qrCodeId})">Удалить коробку</button>` : ''}
+        <button class="btn btn-secondary btn-sm" onclick="openInventoryBox(${item.qrCodeId})">${item.boxId ? 'Настроить' : 'Добавить данные'}</button>
+        ${item.boxId ? `<button class="btn btn-danger btn-sm" onclick="deleteInventoryBox(${item.qrCodeId})">Удалить позицию</button>` : ''}
       </div></td>
     </tr>`).join('');
 }
 
-// Предлагает QR-коды, для которых ещё не заведена коробка.
+// Предлагает QR-коды, для которых ещё не настроены дополнительные данные.
 async function openNewInventoryBox() {
   try {
     await loadInventoryBoxes();
@@ -139,14 +139,14 @@ async function openNewInventoryBox() {
     const select = document.getElementById('new-inventory-qr');
     select.innerHTML = available.map(item => `<option value="${Number(item.qrCodeId)}">${escapeHtml(item.qrCode)}${item.objectName ? ` — ${escapeHtml(item.objectName)}` : ''}</option>`).join('');
     if (!available.length) {
-      toast('Нет свободных QR-кодов. Сначала добавьте QR-код во вкладке «QR-коды».', 'error');
+      toast('Нет QR-кодов без дополнительных данных. Сначала добавьте QR-код или загрузите опись.', 'error');
       return;
     }
     document.getElementById('modal-new-inventory-box').classList.add('open');
   } catch (error) { toast('Не удалось получить список QR-кодов: ' + error.message, 'error'); }
 }
 
-// Открывает форму новой коробки для выбранного QR-кода.
+// Открывает форму дополнительных данных для выбранного QR-кода.
 function createInventoryBoxFromQr() {
   const qrCodeId = Number(document.getElementById('new-inventory-qr').value);
   if (!qrCodeId) return toast('Выберите QR-код.', 'error');
@@ -154,27 +154,27 @@ function createInventoryBoxFromQr() {
   openInventoryBox(qrCodeId);
 }
 
-// Удаляет коробку вместе с её QR-кодом и связанными данными после подтверждения.
+// Удаляет позицию вместе с QR-кодом и связанными данными после подтверждения.
 async function deleteInventoryBox(qrCodeId) {
   const box = inventoryBoxes.find(item => Number(item.qrCodeId) === Number(qrCodeId));
-  if (!box?.boxId) return toast('Настроенная коробка не найдена.', 'error');
+  if (!box?.boxId) return toast('Настроенная позиция не найдена.', 'error');
   const title = box.title || box.objectName || box.qrCode;
-  if (!confirm(`Удалить коробку «${title}» (${box.qrCode}) вместе с QR-кодом, фотографиями, перечнем и всей историей? Это действие нельзя отменить.`)) return;
+  if (!confirm(`Удалить материальную ценность «${title}» (${box.qrCode}) вместе с QR-кодом, фотографиями и историей? Это действие нельзя отменить.`)) return;
   try {
     const response = await fetch(`${API}/api/admin/inventory/boxes/${qrCodeId}`, { method: 'DELETE' });
     const data = await response.json();
-    if (!response.ok) throw new Error(data.message || 'Не удалось удалить коробку');
-    toast(data.message || 'Коробка и её история удалены');
+    if (!response.ok) throw new Error(data.message || 'Не удалось удалить позицию');
+    toast(data.message || 'Позиция и её история удалены');
     await Promise.all([loadInventoryBoxes(), typeof loadInventoryRuns === 'function' && loadInventoryRuns()]);
-  } catch (error) { toast('Ошибка удаления коробки: ' + error.message, 'error'); }
+  } catch (error) { toast('Ошибка удаления позиции: ' + error.message, 'error'); }
 }
 
-// Загружает данные выбранной коробки и заполняет форму её редактирования.
+// Загружает данные выбранной материальной ценности и заполняет форму редактирования.
 async function openInventoryBox(qrCodeId) {
   try {
     const response = await fetch(`${API}/api/admin/inventory/boxes/${qrCodeId}`);
     const data = await response.json();
-    if (!response.ok) throw new Error(data.message || 'Не удалось загрузить коробку');
+    if (!response.ok) throw new Error(data.message || 'Не удалось загрузить позицию');
     await loadInventoryFormOptions();
     inventoryCurrent = data;
     document.getElementById('inventory-qr-id').value = qrCodeId;
@@ -213,7 +213,7 @@ function toggleRemovePhoto(page, button) {
   }
 }
 
-// Добавляет в форму ещё одно поле для фотографии содержимого коробки.
+// Добавляет в форму поле для ещё одного изображения МТР.
 function addInventoryPhotoInput() {
   const allPages = [...(inventoryCurrent?.photos || []).map(photo => Number(photo.pageNumber) || 0), ...inventoryPhotoDrafts.map(draft => draft.pageNumber)];
   const nextPage = Math.max(0, ...allPages) + 1;
@@ -282,12 +282,12 @@ function toggleRemoveModel() {
   }
 }
 
-// Проверяет форму, кодирует новые файлы и отправляет изменения коробки в API.
+// Проверяет форму, кодирует новые файлы и отправляет данные МТР в API.
 async function saveInventoryBox() {
   const qrCodeId = document.getElementById('inventory-qr-id').value;
   const title = document.getElementById('inventory-title').value.trim();
   const items = readInventoryItemRows();
-  if (!title) return toast('Укажите название коробки', 'error');
+  if (!title) return toast('Укажите наименование МТР', 'error');
   if (!items.length) return toast('Добавьте хотя бы одну позицию', 'error');
   if (items.some(item => !item.name || item.expectedQuantity < 1)) return toast('Для каждой позиции укажите название и целое количество > 0', 'error');
   if (new Set(items.map(item => item.name.toLocaleLowerCase('ru-RU'))).size !== items.length) return toast('Удалите повторяющиеся названия позиций', 'error');
@@ -315,8 +315,8 @@ async function saveInventoryBox() {
     }
     const response = await fetch(`${API}/api/admin/inventory/boxes/${qrCodeId}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
     const data = await response.json();
-    if (!response.ok) return toast(data.message || 'Не удалось сохранить коробку', 'error');
-    toast(data.message || 'Данные коробки сохранены');
+    if (!response.ok) return toast(data.message || 'Не удалось сохранить данные МТР', 'error');
+    toast(data.message || 'Данные МТР сохранены');
     await loadInventoryFormOptions();
     closeModal('modal-inventory');
     await loadInventoryBoxes();

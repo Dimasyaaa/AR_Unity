@@ -123,7 +123,7 @@ namespace ArInventory.Local
         public string report_payload { get; set; }
     }
 
-    /// <summary>Локальная запись общего запуска, который объединяет проверки нескольких коробок.</summary>
+    /// <summary>Локальная запись общей описи; user_id равен нулю в режиме общего терминала.</summary>
     [Table("local_inventory_batches")]
     public class LocalInventoryBatch
     {
@@ -134,7 +134,7 @@ namespace ArInventory.Local
         public string client_batch_id { get; set; }
         public long user_id { get; set; }
         public int expected_box_count { get; set; }
-        // QR-коды, которые назначил администратор; храним их вместе с локальной партией.
+        // QR-коды из описи храним вместе с локальной партией для работы без сети.
         public string assigned_qr_codes { get; set; }
         public string started_at { get; set; }
         public string completed_at { get; set; }

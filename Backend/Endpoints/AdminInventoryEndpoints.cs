@@ -19,6 +19,68 @@ public static class AdminInventoryEndpoints
 {
     public static IEndpointRouteBuilder MapAdminInventoryEndpoints(this IEndpointRouteBuilder endpoints)
     {
+        endpoints.MapGet("/api/admin/inventory/current", async (InventoryImportService imports) =>
+        {
+            var current = await imports.GetCurrentAsync();
+            return Results.Ok(new { success = true, current });
+        })
+        .WithTags("Admin: Inventory")
+        .WithSummary("Текущая общая инвентаризация из загруженной описи")
+        .Produces(200);
+
+        endpoints.MapPost("/api/admin/inventory/import/preview", async (
+            HttpRequest request, InventoryImportService imports) =>
+        {
+            try
+            {
+                var upload = await ReadWorkbookUploadAsync(request);
+                var rows = imports.Preview(upload.bytes);
+                return Results.Ok(new
+                {
+                    success = true,
+                    sourceFileName = upload.fileName,
+                    positionCount = rows.Count,
+                    rows
+                });
+            }
+            catch (InvalidDataException error)
+            {
+                return Results.BadRequest(new { success = false, message = error.Message });
+            }
+        })
+        .WithTags("Admin: Inventory")
+        .WithSummary("Проверить Excel-опись и показать строки до запуска")
+        .Produces(200).Produces(400);
+
+        endpoints.MapPost("/api/admin/inventory/import/start", async (
+            HttpRequest request, InventoryImportService imports) =>
+        {
+            try
+            {
+                var upload = await ReadWorkbookUploadAsync(request);
+                var result = await imports.StartAsync(upload.bytes, upload.fileName);
+                return Results.Ok(new
+                {
+                    success = true,
+                    id = result.batchId,
+                    clientBatchId = result.clientBatchId,
+                    positionCount = result.positionCount,
+                    message = $"Инвентаризация запущена. Загружено позиций: {result.positionCount}."
+                });
+            }
+            catch (InvalidDataException error)
+            {
+                return Results.BadRequest(new { success = false, message = error.Message });
+            }
+            catch (InvalidOperationException error)
+            {
+                return Results.Conflict(new { success = false, message = error.Message });
+            }
+        })
+        .WithTags("Admin: Inventory")
+        .WithSummary("Запустить общую инвентаризацию из Excel-описи")
+        .Produces(200).Produces(400).Produces(409);
+
         endpoints.MapPost("/api/admin/inventory/assignments", async (
             InventoryAssignmentCreateDto request, InventoryRunRepository runs) =>
         {
@@ -288,21 +350,46 @@ public static class AdminInventoryEndpoints
         .WithSummary("Сводная таблица позиций всех коробок общей проверки")
         .Produces(200).Produces(404);
 
-        endpoints.MapGet("/api/admin/inventory/batches/{batchId:long}/excel", async (long batchId, InventoryRunRepository runRepo) =>
+        endpoints.MapGet("/api/admin/inventory/batches/{batchId:long}/excel", async (
+            long batchId, InventoryRunRepository runRepo, InventoryImportService imports) =>
         {
             var rows = await runRepo.GetBatchExportRowsAsync(batchId);
             if (rows.Count == 0)
                 return Results.NotFound(new { message = "Для этой общей проверки пока нет результатов" });
 
-            byte[] workbook = InventoryBatchExcelWriter.Create(rows);
+            var source = await imports.GetSourceWorkbookAsync(batchId);
+            byte[] workbook = InventoryBatchExcelWriter.Create(rows, source?.workbook);
+            string fileName = source is null
+                ? $"inventory-batch-{batchId}.xlsx"
+                : $"Опись-{Path.GetFileNameWithoutExtension(source.Value.fileName)}-результат.xlsx";
             return Results.File(workbook,
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                $"inventory-batch-{batchId}.xlsx");
+                fileName);
         })
         .WithTags("Admin: Inventory")
         .WithSummary("Скачать общую инвентаризацию коробок в формате Excel")
         .Produces(200).Produces(404);
 
         return endpoints;
+    }
+
+    /// <summary>Читает загруженную книгу и дополнительные значения формы, не меняя файл на диске.</summary>
+    private static async Task<(byte[] bytes, string fileName)> ReadWorkbookUploadAsync(HttpRequest request)
+    {
+        if (!request.HasFormContentType)
+            throw new InvalidDataException("Отправьте Excel-файл через форму загрузки.");
+
+        IFormCollection form = await request.ReadFormAsync();
+        IFormFile? file = form.Files.GetFile("file");
+        if (file is null || file.Length == 0)
+            throw new InvalidDataException("Выберите заполненную Excel-опись.");
+        if (file.Length > 20 * 1024 * 1024)
+            throw new InvalidDataException("Размер Excel-файла не должен превышать 20 МБ.");
+        if (!string.Equals(Path.GetExtension(file.FileName), ".xlsx", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidDataException("Поддерживаются книги Excel в формате .xlsx.");
+
+        await using var stream = new MemoryStream((int)file.Length);
+        await file.CopyToAsync(stream);
+        return (stream.ToArray(), Path.GetFileName(file.FileName));
     }
 }

@@ -33,7 +33,7 @@ public class DatabaseExportWindow : EditorWindow
         EditorGUILayout.LabelField("Экспорт PostgreSQL → SQLite", EditorStyles.boldLabel);
         EditorGUILayout.HelpBox(
             "Пароль вводится только в этом окне и не сохраняется в проекте. " +
-            "Экспорт включает справочники коробок, активные назначения сотрудников и GLB-модели.",
+            "Экспорт включает справочники коробок, общую активную опись, прежние назначения и GLB-модели.",
             MessageType.Info);
 
         host = EditorGUILayout.TextField("Сервер", host);
@@ -389,7 +389,7 @@ public class DatabaseExportWindow : EditorWindow
         if (!TableExists(postgres, "inventory_batches") || !TableExists(postgres, "inventory_batch_boxes"))
             return;
 
-        // Кэшируем только назначения, которые сотрудник ещё может продолжить.
+        // Экспортируем активные проверки, включая общую опись без назначенного сотрудника.
         using var command = new NpgsqlCommand(@"
             SELECT batch.client_batch_id, batch.user_id, COUNT(assigned.qr_code_id)::INTEGER,
                    batch.started_at, STRING_AGG(qr.code, '|' ORDER BY qr.code)
@@ -402,11 +402,13 @@ public class DatabaseExportWindow : EditorWindow
         using var reader = command.ExecuteReader();
         while (reader.Read())
         {
+            // Ноль — локальный признак описи общего терминала без привязки к сотруднику.
+            long localUserId = reader.IsDBNull(1) ? 0L : reader.GetInt64(1);
             sqlite.Execute(@"
                 INSERT INTO local_inventory_batches
                     (client_batch_id, user_id, expected_box_count, assigned_qr_codes, started_at, status)
                 VALUES (?, ?, ?, ?, ?, 'in_progress')",
-                reader.GetGuid(0).ToString("D"), reader.GetInt64(1), reader.GetInt32(2),
+                reader.GetGuid(0).ToString("D"), localUserId, reader.GetInt32(2),
                 reader.GetString(4), reader.GetDateTime(3).ToUniversalTime().ToString("o"));
         }
     }

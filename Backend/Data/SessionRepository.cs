@@ -66,9 +66,10 @@ public class SessionRepository
         await using var cmd = new NpgsqlCommand(@"
             SELECT 
                 s.id, s.action, s.action_time, s.comment, 
-                u.full_name, u.department, q.code, q.object_name
+                COALESCE(u.full_name, 'Общий терминал'), COALESCE(u.department, ''),
+                q.code, q.object_name
             FROM inventory_sessions s
-            JOIN users u ON u.id = s.user_id
+            LEFT JOIN users u ON u.id = s.user_id
             LEFT JOIN qr_codes q ON q.id = s.qr_code_id
             ORDER BY s.action_time DESC
             LIMIT 500", conn);

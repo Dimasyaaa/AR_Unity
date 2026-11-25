@@ -15,6 +15,13 @@ public class QrDto
     public bool isActive { get; set; } = true;
 }
 
+/// <summary>Данные для создания этикетки МТР с ЕНС/СКК и учётным количеством.</summary>
+public sealed class InventoryQrCreateDto
+{
+    public string ensCode { get; set; } = string.Empty;
+    public int accountingQuantity { get; set; }
+}
+
 public class SyncPayloadDto
 {
     public List<SyncSessionDto> items { get; set; } = new();

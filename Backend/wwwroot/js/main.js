@@ -1,5 +1,4 @@
-// Главная логика админ-панели: переключение разделов, проверка API
-// и обновление открытого журнала или списка проверок.
+// Главная логика админ-панели: разделы, доступность API и обновление данных.
 
 // Переключает разделы и загружает данные выбранной вкладки.
 document.querySelectorAll('.tab').forEach(tab => {
@@ -7,13 +6,13 @@ document.querySelectorAll('.tab').forEach(tab => {
     document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
     tab.classList.add('active');
     const name = tab.dataset.tab;
-    ['users', 'qr', 'inventory', 'runs', 'sessions'].forEach(p => {
+    ['home', 'qr', 'inventory', 'runs', 'sessions'].forEach(p => {
       const panel = document.getElementById('panel-' + p);
       if (panel) panel.style.display = (p === name) ? 'block' : 'none';
     });
 
     // Запрашиваем данные только для открытой вкладки.
-    if (name === 'users' && typeof loadUsers === 'function') loadUsers();
+    if (name === 'home' && typeof loadCurrentInventory === 'function') loadCurrentInventory();
     if (name === 'qr' && typeof loadQr === 'function') loadQr();
     if (name === 'inventory' && typeof loadInventoryBoxes === 'function') loadInventoryBoxes();
     if (name === 'runs' && typeof loadInventoryRuns === 'function') loadInventoryRuns();
@@ -41,17 +40,19 @@ async function checkApiStatus() {
 // Обновляет журнал или результаты, когда пользователь вернулся на страницу.
 function refreshVisibleAdminPanel() {
   if (document.visibilityState !== 'visible') return;
-  if (document.getElementById('panel-sessions')?.style.display !== 'none' && typeof loadSessions === 'function') {
+  if (document.getElementById('panel-home')?.style.display !== 'none' && typeof loadCurrentInventory === 'function') {
+    loadCurrentInventory();
+  } else if (document.getElementById('panel-sessions')?.style.display !== 'none' && typeof loadSessions === 'function') {
     loadSessions(true);
   } else if (document.getElementById('panel-runs')?.style.display !== 'none' && typeof loadInventoryRuns === 'function') {
     loadInventoryRuns(true);
   }
 }
 
-// При старте проверяет API, загружает пользователей и включает автообновление.
+// При старте проверяет API, загружает активную опись и включает автообновление.
 document.addEventListener('DOMContentLoaded', () => {
   checkApiStatus();
-  if (typeof loadUsers === 'function') loadUsers();
+  if (typeof loadCurrentInventory === 'function') loadCurrentInventory();
 
   setInterval(refreshVisibleAdminPanel, 10000);
   window.addEventListener('focus', refreshVisibleAdminPanel);

@@ -219,12 +219,12 @@ public class QRScanner : MonoBehaviour
 #if UNITY_EDITOR
             return null;
 #else
-            return "Нет активного назначения. Вернитесь в меню и запросите инвентаризацию у администратора.";
+            return "Нет активной описи. Вернитесь в меню и проверьте её в панели администратора.";
 #endif
         }
 
         if (!database.IsQrAssignedToBatch(batch.client_batch_id, qrCode))
-            return $"QR «{qrCode}» не входит в ваше назначение. Отсканируйте QR назначенной коробки.";
+            return $"QR «{qrCode}» не входит в активную опись. Отсканируйте QR-код из неё.";
 
         if (database.HasCompletedBox(batch.client_batch_id, qrCode))
             return $"Коробка «{qrCode}» уже проверена. Отсканируйте следующую назначенную коробку.";

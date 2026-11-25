@@ -4,14 +4,19 @@
 /// </summary>
 public static class SessionManager
 {
-    // Значение -1 означает, что успешного входа в текущем запуске приложения не было.
-    public static int UserId { get; private set; } = -1;
+    // Переключатель режимов: false — общая опись без входа, true — прежний вход сотрудника.
+    // Для возврата авторизации установите true и включите LoginScene в Build Settings.
+    public const bool AuthenticationEnabled = false;
 
-    /// <summary>Имя вошедшего пользователя; используется в главном меню и журнале.</summary>
-    public static string FullName { get; private set; } = "";
+    // Ноль — общий терминал; отрицательное значение означает, что вход в старом режиме не выполнен.
+    public static int UserId { get; private set; } = AuthenticationEnabled ? -1 : 0;
 
-    // Положительный ID означает, что пользователь успешно вошёл.
-    public static bool IsLoggedIn => UserId > 0;
+    /// <summary>Имя сотрудника или подпись общего режима в главном меню.</summary>
+    public static string FullName { get; private set; } = AuthenticationEnabled ? "" : "Общий терминал";
+
+    /// <summary>В общем режиме вход не требуется; старое правило оставлено для обратного переключения.</summary>
+    public static bool IsLoggedIn => !AuthenticationEnabled || UserId > 0;
+    // Старая проверка для режима с авторизацией: public static bool IsLoggedIn => UserId > 0;
 
     /// <summary>Сохраняет данные пользователя после успешной проверки логина локальной базой.</summary>
     public static void SetUser(int userId, string fullName)
