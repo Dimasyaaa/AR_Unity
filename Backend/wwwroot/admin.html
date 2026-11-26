@@ -10,7 +10,10 @@
 		<div class="container">
 			<header>
 				<div class="brand-lockup">
-					<div class="brand-mark">AR</div>
+					<!--<div class="brand-mark">AR</div> -->
+					<div class="brand-mark">
+    					<img src="img/nornikel.png" alt="Норникель">
+					</div>
 					<div><h1>AR Inventory</h1><div class="hint">Управление AR-инвентаризацией</div></div>
 				</div>
 				<div class="header-actions">
@@ -30,12 +33,15 @@
 			<div class="panel home-panel" id="panel-home">
 				<section class="inventory-home-hero">
 					<div class="inventory-home-copy">
-						<span class="eyebrow">РАБОЧЕЕ МЕСТО ИНВЕНТАРИЗАЦИИ</span>
+						<span class="eyebrow">ИНВЕНТАРИЗАЦИЯ</span>
 						<h2>Начните проверку по готовой описи</h2>
 						<p>Загрузите Excel-файл со списком материальных ценностей. Система подготовит QR-код для каждой строки и передаст общий перечень в приложение.</p>
 						<button class="btn btn-start-inventory" id="open-inventory-import" type="button" onclick="showInventoryImport()">Начать инвентаризацию</button>
 					</div>
-					<div class="inventory-home-art" aria-hidden="true"><span>01</span><span>02</span><span>03</span><i>✓</i></div>
+					<!--<div class="inventory-home-art" aria-hidden="true"><span>01</span><span>02</span><span>03</span><i>✓</i></div> -->
+					<div class="inventory-home-art" aria-hidden="true">
+    					<img src="img/inventoryLogo.png" alt="Инвентаризация">
+					</div>
 				</section>
 
 			<section class="current-inventory-card" id="current-inventory-card" aria-live="polite">
@@ -44,13 +50,42 @@
 			</section>
 
 			<section class="inventory-import-workflow" id="inventory-import-workflow" hidden>
-				<div class="section-heading"><div><span class="eyebrow">НОВАЯ ИНВЕНТАРИЗАЦИЯ</span><h2>Прикрепите Excel-опись</h2><p class="hint">Выберите готовый файл .xlsx. После проверки опись автоматически станет доступна в AR-приложении.</p></div><button class="icon-button" type="button" onclick="hideInventoryImport()" aria-label="Закрыть выбор описи">×</button></div>
-				<label class="inventory-file-picker" for="inventory-excel-file"><span class="file-picker-icon" aria-hidden="true">XLS</span><span><strong>Выберите файл описи</strong><small>Формат .xlsx, размер до 20 МБ</small></span><span class="btn btn-secondary">Обзор файлов</span></label>
+				<div class="section-heading">
+					<div><span class="eyebrow">НОВАЯ ИНВЕНТАРИЗАЦИЯ</span><h2>Прикрепите Excel-опись</h2><p class="hint">Выберите готовый файл .xlsx. После проверки опись автоматически станет доступна в AR-приложении.</p></div>
+					<button class="icon-button" type="button" onclick="hideInventoryImport()" aria-label="Закрыть выбор описи">×</button>
+				</div>
+				<label class="inventory-file-picker" for="inventory-excel-file">
+					<span class="file-picker-icon" aria-hidden="true">XLS</span>
+					<span><strong>Выберите файл описи</strong><small>Формат .xlsx, размер до 20 МБ</small></span>
+					<span class="btn btn-secondary">Обзор файлов</span>
+				</label>
 				<input class="visually-hidden-file" id="inventory-excel-file" type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onchange="previewInventoryFile(this.files?.[0])">
 				<p class="inventory-import-status hint" id="inventory-import-status" role="status">Опись ещё не выбрана.</p>
 				<div class="inventory-import-preview" id="inventory-import-preview" hidden>
-					<div class="import-preview-heading"><div><h3 id="inventory-import-file-name">Предварительный просмотр</h3><p class="hint" id="inventory-import-position-count"></p></div><button class="btn btn-secondary btn-sm" type="button" onclick="clearInventoryFile()">Выбрать другой файл</button></div>
-					<div class="table-wrap inventory-import-table-wrap"><table class="inventory-import-table"><thead><tr><th>Строка</th><th>Подразделение</th><th>Склад</th><th>Наименование МТР</th><th>ЕНС / СКК</th><th>Счёт</th><th>МОЛ</th><th>Место хранения</th><th>Ед.</th><th>Количество по учёту</th><th>QR-содержимое</th></tr></thead><tbody id="inventory-import-rows"></tbody></table></div>
+					<div class="import-preview-heading"><div>
+						<h3 id="inventory-import-file-name">Предварительный просмотр</h3>
+						<p class="hint" id="inventory-import-position-count"></p>
+					</div>
+					<button class="btn btn-secondary btn-sm" type="button" onclick="clearInventoryFile()">Выбрать другой файл</button>
+				</div>
+					<div class="table-wrap inventory-import-table-wrap">
+						<table class="inventory-import-table">
+							<thead>
+								<tr><th>Строка</th>
+									<th>Подразделение</th>
+									<th>Склад</th>
+									<th>Наименование МТР</th>
+									<th>ЕНС / СКК</th>
+									<th>Счёт</th>
+									<th>МОЛ</th>
+									<th>Место хранения</th>
+									<th>Ед.</th>
+									<th>Количество по учёту</th>
+									<th>QR-содержимое</th></tr>
+							</thead>
+							<tbody id="inventory-import-rows"></tbody>
+						</table>
+					</div>
 					<div class="import-preview-footer"><p class="hint">ЕНС/СКК и учётное количество из строк будут использованы для QR-кодов. Опись запускается автоматически после проверки.</p></div>
 				</div>
 			</section>
@@ -276,13 +311,12 @@
 
 		<div class="toast" id="toast"></div>
 
-		<!-- Сначала подключаются общие помощники, затем разделы и их обработчики. -->
 		<script src="/js/utils.js"></script>
-		<script src="/js/qr.js?v=20261125-qr-preview"></script>
+		<script src="/js/qr.js"></script>
 		<script src="/js/sessions.js"></script>
 		<script src="/js/inventory-runs.js"></script>
 		<script src="/js/inventory-box.js"></script>
-		<script src="/js/inventory-import.js?v=20261125-inventory-import"></script>
+		<script src="/js/inventory-import.js"></script>
 		<script src="/js/main.js"></script>
 </body>
 </html>
